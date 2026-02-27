@@ -98,11 +98,23 @@ def _import_task(conn: sqlite3.Connection, task_data: dict,
     _upsert_user(conn, task_data.get("created_by"))
     _upsert_user(conn, task_data.get("completed_by"))
 
-    # Primary membership for denormalized columns
+    # Primary membership for denormalized columns (pick first membership
+    # whose project exists in the DB to avoid FK violations from cross-team
+    # project references)
     memberships = task_data.get("memberships") or []
-    first = memberships[0] if memberships else {}
-    first_project = first.get("project") or {}
-    first_section = first.get("section") or {}
+    first_project = {}
+    first_section = {}
+    for m in memberships:
+        proj = m.get("project") or {}
+        if proj.get("gid"):
+            exists = conn.execute(
+                "SELECT 1 FROM projects WHERE gid = ?",
+                (proj["gid"],),
+            ).fetchone()
+            if exists:
+                first_project = proj
+                first_section = m.get("section") or {}
+                break
 
     # Sections – upsert every section we see (skip if project not in DB)
     for m in memberships:

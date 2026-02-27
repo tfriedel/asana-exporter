@@ -928,6 +928,11 @@ def main():
         from asana_exporter.database import (
             migrate_schema, import_export_dir, rebuild_task_search_fts)
 
+        if not os.path.isdir(args.export_path):
+            LOG.error("export path '{}' does not exist or is not a "
+                      "directory".format(args.export_path))
+            return
+
         db_path = args.db or os.path.join(args.export_path, 'asana.db')
         LOG.info("importing JSON from '{}' into '{}'".format(
             args.export_path, db_path))

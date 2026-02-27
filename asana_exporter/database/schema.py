@@ -274,6 +274,9 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     if version is None:
         create_schema(conn)
         return
+    # Re-apply current schema to pick up any new tables/indexes/triggers
+    # added within the same version (all DDL uses IF NOT EXISTS).
+    create_schema(conn)
     # Future migrations:
     # if version < 2:
     #     _migrate_v1_to_v2(conn)
