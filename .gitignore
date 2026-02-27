@@ -2,3 +2,4 @@ asana_export
 asana_exporter.egg-info
 dist
 .env
+__pycache__
