@@ -909,10 +909,47 @@ def main():
                               "existing "
                               "extraction archive and will not perform any "
                               "api calls."))
+    parser.add_argument('--to-sqlite', action='store_true',
+                        default=False,
+                        help="Import exported JSON files into a SQLite "
+                             "database. No API calls are made.")
+    parser.add_argument('--db', type=str,
+                        default=None,
+                        help="SQLite database path (default: "
+                             "<export-path>/asana.db). "
+                             "Used with --to-sqlite.")
 
     args = parser.parse_args()
     if args.debug:
         LOG.set_level('debug')
+
+    if args.to_sqlite:
+        import sqlite3
+        from asana_exporter.database import (
+            migrate_schema, import_export_dir, rebuild_task_search_fts)
+
+        if not os.path.isdir(args.export_path):
+            LOG.error("export path '{}' does not exist or is not a "
+                      "directory".format(args.export_path))
+            return
+
+        db_path = args.db or os.path.join(args.export_path, 'asana.db')
+        LOG.info("importing JSON from '{}' into '{}'".format(
+            args.export_path, db_path))
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            migrate_schema(conn)
+            stats = import_export_dir(conn, args.export_path,
+                                      force=args.force_update)
+            fts_count = rebuild_task_search_fts(conn)
+            LOG.info("import complete: {}".format(stats))
+            LOG.info("FTS index: {} top-level tasks indexed".format(fts_count))
+        finally:
+            conn.close()
+
+        LOG.info("done.")
+        return
 
     ae = AsanaExtractor(token=args.token, workspace=args.workspace,
                         teamname=args.team, export_path=args.export_path,
