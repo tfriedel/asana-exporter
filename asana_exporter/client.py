@@ -164,9 +164,8 @@ class AsanaProjects(AsanaResourceBase):
         total = 0
         ignored = []
         projects = []
-        for p in self.client.projects.find_by_workspace(
-                                                  workspace=self.workspace,
-                                                  team=self.team['gid']):
+        for p in asana.ProjectsApi(self.client).get_projects_for_team(
+                self.team['gid'], {}):
             total += 1
             projects.append(p)
 
@@ -241,7 +240,8 @@ class AsanaProjectTasks(AsanaResourceBase):
             os.makedirs(path)
 
         tasks = []
-        for t in self.client.projects.tasks(self.project['gid']):
+        for t in asana.TasksApi(self.client).get_tasks_for_project(
+                self.project['gid'], {}):
             tasks.append(t)
 
         # yield
@@ -255,7 +255,7 @@ class AsanaProjectTasks(AsanaResourceBase):
             if not os.path.isdir(task_path):
                 os.makedirs(task_path)
 
-            fulltask = self.client.tasks.find_by_id(t['gid'])
+            fulltask = asana.TasksApi(self.client).get_task(t['gid'], {})
             self._export_write_locked(task_json_path, json.dumps(fulltask))
 
         self._export_write_locked(self._local_store, json.dumps(tasks))
@@ -306,7 +306,8 @@ class AsanaTaskSubTasks(AsanaResourceBase):
             os.makedirs(path)
 
         subtasks = []
-        for s in self.client.tasks.subtasks(self.task['gid']):
+        for s in asana.TasksApi(self.client).get_subtasks_for_task(
+                self.task['gid'], {}):
             subtasks.append(s)
 
         # yield
@@ -320,7 +321,7 @@ class AsanaTaskSubTasks(AsanaResourceBase):
             if not os.path.isdir(task_path):
                 os.makedirs(task_path)
 
-            fulltask = self.client.tasks.find_by_id(t['gid'])
+            fulltask = asana.TasksApi(self.client).get_task(t['gid'], {})
             self._export_write_locked(task_json_path, json.dumps(fulltask))
 
         self._export_write_locked(self._local_store, json.dumps(subtasks))
@@ -372,7 +373,8 @@ class AsanaProjectTaskStories(AsanaResourceBase):
             os.makedirs(path)
 
         stories = []
-        for s in self.client.stories.find_by_task(self.task['gid']):
+        for s in asana.StoriesApi(self.client).get_stories_for_task(
+                self.task['gid'], {}):
             stories.append(s)
 
         # yield
@@ -417,15 +419,28 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
     def _local_store(self):
         return os.path.join(self.root_path, 'attachments.json')
 
-    def _download(self, url, path):
+    def _download(self, url, path, retries=3):
         LOG.debug("downloading {} to {}".format(url, path))
-        rq = urllib.request.Request(url=url)
-        with urllib.request.urlopen(rq) as url_fd:
-            with open(path, 'wb') as fd:
-                out = 'SOF'
-                while out:
-                    out = url_fd.read(4096)
-                    fd.write(out)
+        for attempt in range(retries):
+            try:
+                rq = urllib.request.Request(url=url)
+                with urllib.request.urlopen(rq) as url_fd:
+                    with open(path, 'wb') as fd:
+                        out = 'SOF'
+                        while out:
+                            out = url_fd.read(4096)
+                            fd.write(out)
+                return
+            except (urllib.error.URLError, ConnectionError, OSError) as e:
+                if attempt < retries - 1:
+                    wait = 2 ** attempt
+                    LOG.warning("download failed (attempt {}/{}): {}. "
+                                "Retrying in {}s...".format(
+                                    attempt + 1, retries, e, wait))
+                    time.sleep(wait)
+                else:
+                    LOG.error("download failed after {} attempts: {}".
+                              format(retries, e))
 
     def _from_local(self):
         attachments = []
@@ -459,7 +474,8 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
             os.makedirs(path)
 
         attachments = []
-        for s in self.client.attachments.find_by_task(self.task['gid']):
+        for s in asana.AttachmentsApi(self.client).get_attachments_for_object(
+                self.task['gid'], {}):
             attachments.append(s)
 
         # yield
@@ -467,7 +483,8 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         for s in attachments:
             # convert "compact" record to "full"
             with open(os.path.join(path, s['gid']), 'w') as fd:
-                s = self.client.attachments.find_by_id(s['gid'])
+                s = asana.AttachmentsApi(self.client).get_attachment(
+                    s['gid'], {})
                 fd.write(json.dumps(s))
                 url = s['download_url']
                 if url:
@@ -499,8 +516,11 @@ class AsanaExtractor(object):
     @cached_property
     @utils.required({'token': '--token'})
     def client(self):
-        headers = {"Asana-Enable": ["new_user_task_lists"]}
-        return asana.Client(headers=headers).access_token(self.token)
+        configuration = asana.Configuration()
+        configuration.access_token = self.token
+        api_client = asana.ApiClient(configuration)
+        api_client.default_headers['Asana-Enable'] = 'new_user_task_lists'
+        return api_client
 
     @cached_property
     @utils.required({'_workspace': '--workspace'})
@@ -511,7 +531,8 @@ class AsanaExtractor(object):
         try:
             return int(self._workspace)
         except ValueError:
-            ws = [w['gid'] for w in self.client.workspaces.find_all()
+            ws = [w['gid'] for w in
+                  asana.WorkspacesApi(self.client).get_workspaces({})
                   if w['name'] == self._workspace][0]
             LOG.info("resolved workspace name '{}' to gid '{}'".
                      format(self._workspace, ws))
@@ -532,7 +553,8 @@ class AsanaExtractor(object):
         else:
             LOG.debug("fetching teams from api")
             teams = []
-            for p in self.client.teams.find_by_organization(self.workspace):
+            for p in asana.TeamsApi(self.client).get_teams_for_workspace(
+                    str(self.workspace), {}):
                 teams.append(p)
 
             if not readonly:
@@ -597,8 +619,8 @@ class AsanaExtractor(object):
                 os.makedirs(path)
 
             templates = []
-            for t in self.client.projects.find_by_team(team=self.team['gid'],
-                                                       is_template=True):
+            for t in asana.ProjectsApi(self.client).get_projects_for_team(
+                    self.team['gid'], {'is_template': True}):
                 templates.append(t)
 
             # yield
@@ -752,6 +774,14 @@ def main():
                         default=None,
                         help=("Regular expression filter used to include "
                               "projects."))
+    parser.add_argument('--all-teams', action='store_true',
+                        default=False,
+                        help="Export all teams (instead of specifying "
+                             "--team).")
+    parser.add_argument('--list-workspaces', action='store_true',
+                        default=False,
+                        help="List all workspaces accessible with the "
+                             "given token.")
     parser.add_argument('--list-teams', action='store_true',
                         default=False,
                         help=("List all teams. This will "
@@ -782,7 +812,17 @@ def main():
                         project_include_filter=args.project_filter,
                         project_exclude_filter=args.exclude_projects,
                         force_update=args.force_update)
-    if args.list_teams:
+    if args.list_workspaces:
+        configuration = asana.Configuration()
+        configuration.access_token = args.token
+        api_client = asana.ApiClient(configuration)
+        workspaces = list(
+            asana.WorkspacesApi(api_client).get_workspaces({}))
+        if workspaces:
+            print("\nWorkspaces:")
+            print('\n'.join(["{}: '{}'".format(w['gid'], w['name'])
+                             for w in workspaces]))
+    elif args.list_teams:
         teams, stats = ae.get_teams(readonly=True)
         LOG.debug("stats: {}".format(stats))
         if teams:
@@ -817,6 +857,17 @@ def main():
             LOG.debug("project name '{}' does not match any of the following:"
                       "\n{}".format(args.list_project_tasks,
                                     '\n'.join(pnames)))
+    elif args.all_teams:
+        teams, _ = ae.get_teams()
+        for t in teams:
+            LOG.info("exporting team '{}'".format(t['name']))
+            team_ae = AsanaExtractor(
+                token=args.token, workspace=args.workspace,
+                teamname=t['name'], export_path=args.export_path,
+                project_include_filter=args.project_filter,
+                project_exclude_filter=args.exclude_projects,
+                force_update=args.force_update)
+            team_ae.run()
     else:
         ae.run()
 
