@@ -3,6 +3,7 @@ import abc
 import argparse
 import collections
 import concurrent.futures
+import datetime
 import os
 import queue
 import re
@@ -72,19 +73,19 @@ class AsanaResourceBase(abc.ABC):
 
             objs = self._from_local()
         else:
-            objs = []
+            objs = None
 
-        if not objs and (update_from_api or self.force_update):
+        if objs is None and (update_from_api or self.force_update):
             with self.export_semaphone:
                 objs = self._from_api(readonly=readonly)
 
-        if not objs and not prefer_cache:
+        if objs is None and not prefer_cache:
             while self.export_semaphone._value == 0:
                 time.sleep(1)
 
             objs = self._from_local()
 
-        return objs
+        return objs if objs is not None else []
 
 
 class ExtractorStats(collections.UserDict):
@@ -147,12 +148,11 @@ class AsanaProjects(AsanaResourceBase):
         return _projects
 
     def _from_local(self):
-        projects = []
         LOG.debug("fetching projects for team '{}' from cache".
                   format(self.team['name']))
         projects = self._export_read_locked(self._local_store)
-        if not projects:
-            return []
+        if projects is None:
+            return None
 
         projects = self._filter_projects(json.loads(projects))
         self.stats['num_projects'] = len(projects)
@@ -209,6 +209,7 @@ class AsanaProjectTasks(AsanaResourceBase):
         self.project = project
         self.root_path = os.path.join(projects_dir, project['gid'])
         self._stats = ExtractorStats()
+        self.modified_gids = None  # None = full sync, set() = incremental
         super().__init__(force_update)
 
     @property
@@ -219,12 +220,30 @@ class AsanaProjectTasks(AsanaResourceBase):
     def _local_store(self):
         return os.path.join(self.root_path, 'tasks.json')
 
+    @property
+    def _sync_meta_path(self):
+        return os.path.join(self.root_path, '.sync_meta.json')
+
+    def _load_sync_meta(self):
+        data = self._export_read_locked(self._sync_meta_path)
+        if data is None:
+            return None
+        try:
+            return json.loads(data)
+        except (json.JSONDecodeError, KeyError):
+            LOG.warning("corrupt sync metadata, will do full sync")
+            return None
+
+    def _save_sync_meta(self, timestamp):
+        meta = {'last_sync': timestamp, 'version': 1}
+        self._export_write_locked(self._sync_meta_path, json.dumps(meta))
+
     def _from_local(self):
         LOG.debug("fetching tasks for project '{}' (gid={}) from cache".
                   format(self.project['name'], self.project['gid']))
         tasks = self._export_read_locked(self._local_store)
-        if not tasks:
-            return []
+        if tasks is None:
+            return None
 
         tasks = json.loads(tasks)
         LOG.debug("fetched {} tasks".format(len(tasks)))
@@ -232,33 +251,92 @@ class AsanaProjectTasks(AsanaResourceBase):
         return tasks
 
     def _from_api(self, readonly=False):
-        tasks = []
         LOG.info("fetching tasks for project '{}' (gid={}) from api".
                  format(self.project['name'], self.project['gid']))
         path = os.path.join(self.root_path, 'tasks')
         if not os.path.isdir(path):
             os.makedirs(path)
 
-        tasks = []
-        for t in asana.TasksApi(self.client).get_tasks_for_project(
-                self.project['gid'], {}):
-            tasks.append(t)
+        # Check if incremental sync is possible
+        sync_meta = self._load_sync_meta()
+        existing_tasks = self._from_local()
 
-        # yield
-        time.sleep(0)
-        for t in tasks:
-            task_path = os.path.join(path, t['gid'])
-            task_json_path = os.path.join(task_path, 'task.json')
-            if os.path.exists(task_json_path):
-                continue
+        use_incremental = (
+            sync_meta is not None
+            and existing_tasks is not None
+            and not self.force_update
+        )
 
-            if not os.path.isdir(task_path):
-                os.makedirs(task_path)
+        # Record sync start BEFORE API calls to avoid gaps
+        sync_start = datetime.datetime.now(
+            datetime.timezone.utc).isoformat()
 
-            fulltask = asana.TasksApi(self.client).get_task(t['gid'], {})
-            self._export_write_locked(task_json_path, json.dumps(fulltask))
+        if use_incremental:
+            last_sync = sync_meta['last_sync']
+            LOG.info("incremental sync since {}".format(last_sync))
+            modified_tasks = []
+            for t in asana.TasksApi(self.client).get_tasks(
+                    {'project': self.project['gid'],
+                     'modified_since': last_sync}):
+                modified_tasks.append(t)
 
-        self._export_write_locked(self._local_store, json.dumps(tasks))
+            self.modified_gids = set(t['gid'] for t in modified_tasks)
+            LOG.info("found {} modified tasks".format(len(modified_tasks)))
+
+            if not modified_tasks:
+                if not readonly:
+                    self._save_sync_meta(sync_start)
+                self.stats['num_tasks'] = len(existing_tasks)
+                return existing_tasks
+
+            # Merge modified tasks into existing
+            existing_by_gid = {t['gid']: t for t in existing_tasks}
+
+            # yield
+            time.sleep(0)
+            for t in modified_tasks:
+                task_path = os.path.join(path, t['gid'])
+                task_json_path = os.path.join(task_path, 'task.json')
+                if not os.path.isdir(task_path):
+                    os.makedirs(task_path)
+
+                fulltask = asana.TasksApi(self.client).get_task(
+                    t['gid'], {})
+                self._export_write_locked(
+                    task_json_path, json.dumps(fulltask))
+                existing_by_gid[t['gid']] = t
+
+            tasks = list(existing_by_gid.values())
+        else:
+            # Full sync (first run or --force-update)
+            self.modified_gids = None
+
+            tasks = []
+            for t in asana.TasksApi(self.client).get_tasks_for_project(
+                    self.project['gid'], {}):
+                tasks.append(t)
+
+            # yield
+            time.sleep(0)
+            for t in tasks:
+                task_path = os.path.join(path, t['gid'])
+                task_json_path = os.path.join(task_path, 'task.json')
+                if os.path.exists(task_json_path):
+                    continue
+
+                if not os.path.isdir(task_path):
+                    os.makedirs(task_path)
+
+                fulltask = asana.TasksApi(self.client).get_task(
+                    t['gid'], {})
+                self._export_write_locked(
+                    task_json_path, json.dumps(fulltask))
+
+        if not readonly:
+            self._export_write_locked(
+                self._local_store, json.dumps(tasks))
+            self._save_sync_meta(sync_start)
+
         self.stats['num_tasks'] = len(tasks)
         return tasks
 
@@ -289,8 +367,8 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         LOG.debug("fetching subtasks for task '{}' (project={}) from "
                   "cache".format(t_name, p_gid))
         subtasks = self._export_read_locked(self._local_store)
-        if not subtasks:
-            return []
+        if subtasks is None:
+            return None
 
         subtasks = json.loads(subtasks)
         self.stats['num_subtasks'] = len(subtasks)
@@ -356,8 +434,8 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         LOG.debug("fetching stories for task '{}' (project={}) from cache".
                   format(t_name, p_gid))
         stories = self._export_read_locked(self._local_store)
-        if not stories:
-            return []
+        if stories is None:
+            return None
 
         stories = json.loads(stories)
         self.stats['num_stories'] = len(stories)
@@ -453,8 +531,8 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         LOG.debug("fetching attachments for {}task '{}' (project={}) from "
                   "cache".format(t_type, t_name, p_gid))
         attachments = self._export_read_locked(self._local_store)
-        if not attachments:
-            return []
+        if attachments is None:
+            return None
 
         attachments = json.loads(attachments)
         self.stats['num_attachments'] = len(attachments)
@@ -638,7 +716,7 @@ class AsanaExtractor(object):
         apt = AsanaProjectTasks(self.client, project, self.projects_dir,
                                 force_update=self.force_update)
         tasks = apt.get(*args, **kwargs)
-        return tasks, apt.stats
+        return tasks, apt.stats, apt.modified_gids
 
     def get_task_subtasks(self, project, task, event, stats_queue,
                           *args, **kwargs):
@@ -682,9 +760,11 @@ class AsanaExtractor(object):
         while not event.is_set():
             time.sleep(1)
 
+        # Subtasks were already fetched by get_task_subtasks, so always
+        # read from cache here (no need to re-fetch from API)
         st_obj = AsanaTaskSubTasks(self.client, project, self.projects_dir,
                                    task, force_update=self.force_update)
-        subtasks = st_obj.get(*args, **kwargs)
+        subtasks = st_obj.get()
         stats = st_obj.stats
         stats['num_subtask_attachments'] = 0
         if not subtasks:
@@ -698,6 +778,7 @@ class AsanaExtractor(object):
                                                self.projects_dir, task,
                                                subtask,
                                                force_update=self.force_update)
+            # Pass through kwargs (e.g. prefer_cache=False) for attachments
             attachments.extend(asta.get(*args, **kwargs))
             stats['num_subtask_attachments'] += asta.stats['num_attachments']
 
@@ -716,23 +797,49 @@ class AsanaExtractor(object):
         stats_queue = queue.Queue()
         for p in projects:
             LOG.info("extracting project {}".format(p['name']))
-            tasks, task_stats = self.get_project_tasks(p)
+            tasks, task_stats, modified_gids = self.get_project_tasks(
+                p, prefer_cache=False)
             stats.combine(task_stats)
+
+            # Determine which tasks need sub-resource refresh
+            if modified_gids is not None:
+                tasks_to_process = [t for t in tasks
+                                    if t['gid'] in modified_gids]
+                LOG.info("processing {}/{} modified tasks for project "
+                         "'{}'".format(len(tasks_to_process), len(tasks),
+                                       p['name']))
+            else:
+                tasks_to_process = tasks
+
+            if not tasks_to_process:
+                continue
+
+            # For modified tasks in incremental mode, bypass sub-resource
+            # cache to pick up changes
+            force_sub = modified_gids is not None
 
             jobs = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as \
                     executor:
-                for t in tasks:
+                for t in tasks_to_process:
                     jobs[executor.submit(self.get_task_stories,
-                                         p, t, stats_queue)] = t['name']
+                                         p, t, stats_queue,
+                                         prefer_cache=not force_sub
+                                         )] = t['name']
 
                     jobs[executor.submit(self.get_task_attachments,
-                                         p, t, stats_queue)] = t['name']
+                                         p, t, stats_queue,
+                                         prefer_cache=not force_sub
+                                         )] = t['name']
                     event = threading.Event()
                     jobs[executor.submit(self.get_task_subtasks,
-                                         p, t, event, stats_queue)] = t['name']
+                                         p, t, event, stats_queue,
+                                         prefer_cache=not force_sub
+                                         )] = t['name']
                     jobs[executor.submit(self.get_subtask_attachments,
-                                         p, t, event, stats_queue)] = t['name']
+                                         p, t, event, stats_queue,
+                                         prefer_cache=not force_sub
+                                         )] = t['name']
 
                 for job in concurrent.futures.as_completed(jobs):
                     job.result()
@@ -843,8 +950,8 @@ def main():
         LOG.debug("stats: {}".format(stats))
         for p in projects:
             if p['name'] == args.list_project_tasks:
-                tasks, _ = ae.get_project_tasks(p, update_from_api=False,
-                                                readonly=True)
+                tasks, _, _ = ae.get_project_tasks(p, update_from_api=False,
+                                                   readonly=True)
                 if tasks:
                     print("\nTasks:")
                     print('\n'.join(["{}: '{}'".
