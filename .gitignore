@@ -288,8 +288,9 @@ tags
 
 # End of https://www.toptal.com/developers/gitignore/api/linux,macos,visualstudiocode,vim,python,jupyternotebooks,venv,virtualenv
 
-# TDD-Guard
+# Claude Code
 .claude/tdd-guard/
+.claude/settings.local.json
 
 # Project-specific
 asana_export/
