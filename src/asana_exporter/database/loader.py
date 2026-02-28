@@ -6,6 +6,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from asana_exporter.utils import LOG
 
@@ -77,7 +78,7 @@ def _upsert_user(conn: sqlite3.Connection, user: dict | None) -> None:
     )
 
 
-def _safe_get(data: dict, *keys, default=None):
+def _safe_get(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
     """Safely traverse nested dicts, returning *default* on any miss."""
     obj = data
     for k in keys:

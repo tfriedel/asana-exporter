@@ -14,6 +14,7 @@ import urllib
 import urllib.request
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 import asana
 from loguru import logger
@@ -23,32 +24,32 @@ from asana_exporter.utils import LOG
 
 
 class AsanaResourceBase(abc.ABC):
-    def __init__(self, force_update=False):
+    def __init__(self, force_update: bool = False) -> None:
         self.force_update = force_update
         self.export_semaphone = threading.Semaphore()
 
     @property
     @abc.abstractmethod
-    def _local_store(self):
+    def _local_store(self) -> Path:
         """Path to local store of information. If this exists it suggests we have
         done at least one api request for this resources.
         """
 
     @property
     @abc.abstractmethod
-    def stats(self):
+    def stats(self) -> "ExtractorStats":
         """Return ExtractorStats object."""
 
     @abc.abstractmethod
-    def _from_api(self, readonly=False):
+    def _from_api(self, readonly: bool = False) -> list[dict[str, Any]] | None:
         """Fetch resources from the API."""
 
     @abc.abstractmethod
-    def _from_local(self):
+    def _from_local(self) -> list[dict[str, Any]] | None:
         """Fetch resources from the local cache/export."""
 
     @utils.with_lock
-    def _export_write_locked(self, path, data):
+    def _export_write_locked(self, path: str | Path, data: str) -> None:
         p = Path(path)
         if not p.parent.is_dir():
             LOG.debug(f"write path not found {p.parent}")
@@ -57,16 +58,21 @@ class AsanaResourceBase(abc.ABC):
         p.write_text(data)
 
     @utils.with_lock
-    def _export_read_locked(self, path):
-        """Read from export"""
+    def _export_read_locked(self, path: str | Path) -> str | None:
+        """Read from export."""
         p = Path(path)
         if not p.exists():
             LOG.debug(f"read path not found {p}")
-            return
+            return None
 
         return p.read_text()
 
-    def get(self, update_from_api=True, prefer_cache=True, readonly=False):
+    def get(
+        self,
+        update_from_api: bool = True,
+        prefer_cache: bool = True,
+        readonly: bool = False,
+    ) -> list[dict[str, Any]]:
         if prefer_cache and not self.force_update:
             while self.export_semaphone._value == 0:
                 update_from_api = False
@@ -90,10 +96,10 @@ class AsanaResourceBase(abc.ABC):
 
 
 class ExtractorStats(collections.UserDict):
-    def __init__(self):
-        self.data = {}
+    def __init__(self) -> None:
+        self.data: dict[str, Any] = {}
 
-    def combine(self, stats):
+    def combine(self, stats: dict[str, Any]) -> None:
         for key, value in stats.items():
             if key in self.data:
                 if isinstance(value, dict):
@@ -103,7 +109,7 @@ class ExtractorStats(collections.UserDict):
             else:
                 self.data[key] = value
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         msg = []
         for key, value in self.items():
             msg.append(f"{key}={value}")
@@ -114,14 +120,14 @@ class ExtractorStats(collections.UserDict):
 class AsanaProjects(AsanaResourceBase):
     def __init__(
         self,
-        client,
-        workspace,
-        team,
-        project_include_filter,
-        project_exclude_filter,
-        projects_json,
-        force_update,
-    ):
+        client: asana.ApiClient,
+        workspace: str | int,
+        team: dict[str, Any],
+        project_include_filter: str | None,
+        project_exclude_filter: str | None,
+        projects_json: Path,
+        force_update: bool,
+    ) -> None:
         self.client = client
         self.workspace = workspace
         self.project_include_filter = project_include_filter
@@ -132,14 +138,14 @@ class AsanaProjects(AsanaResourceBase):
         super().__init__(force_update)
 
     @property
-    def stats(self):
+    def stats(self) -> ExtractorStats:
         return self._stats
 
     @property
-    def _local_store(self):
+    def _local_store(self) -> Path:
         return self.projects_json
 
-    def _filter_projects(self, projects):
+    def _filter_projects(self, projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
         filtered = []
         for p in projects:
             if self.project_include_filter and not re.search(
@@ -154,21 +160,21 @@ class AsanaProjects(AsanaResourceBase):
 
         return filtered
 
-    def _from_local(self):
+    def _from_local(self) -> list[dict[str, Any]] | None:
         LOG.debug(f"fetching projects for team '{self.team['name']}' from cache")
         projects = self._export_read_locked(self._local_store)
         if projects is None:
             return None
 
-        projects = self._filter_projects(json.loads(projects))
-        self.stats["num_projects"] = len(projects)
-        return projects
+        filtered = self._filter_projects(json.loads(projects))
+        self.stats["num_projects"] = len(filtered)
+        return filtered
 
-    def _from_api(self, readonly=False):
+    def _from_api(self, readonly: bool = False) -> list[dict[str, Any]]:
         LOG.info(f"fetching projects for team '{self.team['name']}' from api")
         total = 0
         ignored = []
-        projects = []
+        projects: list[dict[str, Any]] = []
         for p in asana.ProjectsApi(self.client).get_projects_for_team(self.team["gid"], {}):
             total += 1
             projects.append(p)
@@ -196,27 +202,33 @@ class AsanaProjects(AsanaResourceBase):
 
 
 class AsanaProjectTasks(AsanaResourceBase):
-    def __init__(self, client, project, projects_dir, force_update=False):
+    def __init__(
+        self,
+        client: asana.ApiClient,
+        project: dict[str, Any],
+        projects_dir: Path,
+        force_update: bool = False,
+    ) -> None:
         self.client = client
         self.project = project
         self.root_path = Path(projects_dir) / project["gid"]
         self._stats = ExtractorStats()
-        self.modified_gids = None  # None = full sync, set() = incremental
+        self.modified_gids: set[str] | None = None  # None = full sync, set() = incremental
         super().__init__(force_update)
 
     @property
-    def stats(self):
+    def stats(self) -> ExtractorStats:
         return self._stats
 
     @property
-    def _local_store(self):
+    def _local_store(self) -> Path:
         return self.root_path / "tasks.json"
 
     @property
-    def _sync_meta_path(self):
+    def _sync_meta_path(self) -> Path:
         return self.root_path / ".sync_meta.json"
 
-    def _load_sync_meta(self):
+    def _load_sync_meta(self) -> dict[str, Any] | None:
         data = self._export_read_locked(self._sync_meta_path)
         if data is None:
             return None
@@ -226,11 +238,11 @@ class AsanaProjectTasks(AsanaResourceBase):
             LOG.warning("corrupt sync metadata, will do full sync")
             return None
 
-    def _save_sync_meta(self, timestamp):
+    def _save_sync_meta(self, timestamp: str) -> None:
         meta = {"last_sync": timestamp, "version": 1}
         self._export_write_locked(self._sync_meta_path, json.dumps(meta))
 
-    def _from_local(self):
+    def _from_local(self) -> list[dict[str, Any]] | None:
         p_name = self.project["name"]
         p_gid = self.project["gid"]
         LOG.debug(f"fetching tasks for project '{p_name}' (gid={p_gid}) from cache")
@@ -243,7 +255,7 @@ class AsanaProjectTasks(AsanaResourceBase):
         self.stats["num_tasks"] = len(tasks)
         return tasks
 
-    def _from_api(self, readonly=False):
+    def _from_api(self, readonly: bool = False) -> list[dict[str, Any]]:
         p_name = self.project["name"]
         p_gid = self.project["gid"]
         LOG.info(f"fetching tasks for project '{p_name}' (gid={p_gid}) from api")
@@ -324,7 +336,14 @@ class AsanaProjectTasks(AsanaResourceBase):
 
 
 class AsanaTaskSubTasks(AsanaResourceBase):
-    def __init__(self, client, project, projects_dir, task, force_update=False):
+    def __init__(
+        self,
+        client: asana.ApiClient,
+        project: dict[str, Any],
+        projects_dir: Path,
+        task: dict[str, Any],
+        force_update: bool = False,
+    ) -> None:
         self.client = client
         self.project = project
         self.task = task
@@ -333,14 +352,14 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         super().__init__(force_update)
 
     @property
-    def stats(self):
+    def stats(self) -> ExtractorStats:
         return self._stats
 
     @property
-    def _local_store(self):
+    def _local_store(self) -> Path:
         return self.root_path / "subtasks.json"
 
-    def _from_local(self):
+    def _from_local(self) -> list[dict[str, Any]] | None:
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
         LOG.debug(f"fetching subtasks for task '{t_name}' (project={p_gid}) from cache")
@@ -352,7 +371,7 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         self.stats["num_subtasks"] = len(subtasks)
         return subtasks
 
-    def _from_api(self, readonly=False):
+    def _from_api(self, readonly: bool = False) -> list[dict[str, Any]]:
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
         LOG.info(f"fetching subtasks for task='{t_name}' (project gid={p_gid}) from api")
@@ -383,7 +402,14 @@ class AsanaTaskSubTasks(AsanaResourceBase):
 
 
 class AsanaProjectTaskStories(AsanaResourceBase):
-    def __init__(self, client, project, projects_dir, task, force_update=False):
+    def __init__(
+        self,
+        client: asana.ApiClient,
+        project: dict[str, Any],
+        projects_dir: Path,
+        task: dict[str, Any],
+        force_update: bool = False,
+    ) -> None:
         self.client = client
         self.project = project
         self.task = task
@@ -392,14 +418,14 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         super().__init__(force_update)
 
     @property
-    def stats(self):
+    def stats(self) -> ExtractorStats:
         return self._stats
 
     @property
-    def _local_store(self):
+    def _local_store(self) -> Path:
         return self.root_path / "stories.json"
 
-    def _from_local(self):
+    def _from_local(self) -> list[dict[str, Any]] | None:
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
         LOG.debug(f"fetching stories for task '{t_name}' (project={p_gid}) from cache")
@@ -411,7 +437,7 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         self.stats["num_stories"] = len(stories)
         return stories
 
-    def _from_api(self, readonly=False):
+    def _from_api(self, readonly: bool = False) -> list[dict[str, Any]]:
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
         LOG.info(f"fetching stories for task='{t_name}' (project gid={p_gid}) from api")
@@ -433,7 +459,15 @@ class AsanaProjectTaskStories(AsanaResourceBase):
 
 
 class AsanaProjectTaskAttachments(AsanaResourceBase):
-    def __init__(self, client, project, projects_dir, task, subtask=None, force_update=False):
+    def __init__(
+        self,
+        client: asana.ApiClient,
+        project: dict[str, Any],
+        projects_dir: Path,
+        task: dict[str, Any],
+        subtask: dict[str, Any] | None = None,
+        force_update: bool = False,
+    ) -> None:
         self.client = client
         self.project = project
         self._task = task
@@ -445,21 +479,21 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         super().__init__(force_update)
 
     @property
-    def stats(self):
+    def stats(self) -> ExtractorStats:
         return self._stats
 
     @property
-    def task(self):
+    def task(self) -> dict[str, Any]:
         if self._subtask:
             return self._subtask
 
         return self._task
 
     @property
-    def _local_store(self):
+    def _local_store(self) -> Path:
         return self.root_path / "attachments.json"
 
-    def _download(self, url, path, retries=3):
+    def _download(self, url: str, path: str | Path, retries: int = 3) -> None:
         LOG.debug(f"downloading {url} to {path}")
         for attempt in range(retries):
             try:
@@ -481,7 +515,7 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
                 else:
                     LOG.error(f"download failed after {retries} attempts: {e}")
 
-    def _from_local(self):
+    def _from_local(self) -> list[dict[str, Any]] | None:
         attachments = []
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
@@ -490,15 +524,15 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
             t_type = "sub"
 
         LOG.debug(f"fetching attachments for {t_type}task '{t_name}' (project={p_gid}) from cache")
-        attachments = self._export_read_locked(self._local_store)
-        if attachments is None:
+        raw = self._export_read_locked(self._local_store)
+        if raw is None:
             return None
 
-        attachments = json.loads(attachments)
+        attachments = json.loads(raw)
         self.stats["num_attachments"] = len(attachments)
         return attachments
 
-    def _from_api(self, readonly=False):
+    def _from_api(self, readonly: bool = False) -> list[dict[str, Any]]:
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
         t_type = ""
@@ -532,14 +566,14 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
 class AsanaExtractor:
     def __init__(
         self,
-        token,
-        workspace,
-        teamname,
-        export_path,
-        project_include_filter=None,
-        project_exclude_filter=None,
-        force_update=False,
-    ):
+        token: str | None,
+        workspace: str | None,
+        teamname: str | None,
+        export_path: str,
+        project_include_filter: str | None = None,
+        project_exclude_filter: str | None = None,
+        force_update: bool = False,
+    ) -> None:
         self._workspace = workspace
         self.teamname = teamname
         self.export_path = export_path
@@ -551,7 +585,7 @@ class AsanaExtractor:
 
     @cached_property
     @utils.required({"token": "--token"})
-    def client(self):
+    def client(self) -> asana.ApiClient:
         configuration = asana.Configuration()
         configuration.access_token = self.token
         api_client = asana.ApiClient(configuration)
@@ -560,7 +594,7 @@ class AsanaExtractor:
 
     @cached_property
     @utils.required({"_workspace": "--workspace"})
-    def workspace(self):
+    def workspace(self) -> int | str:
         """If workspace name is provided we need to lookup its GID."""
         try:
             return int(self._workspace)
@@ -574,13 +608,13 @@ class AsanaExtractor:
             return ws
 
     @property
-    def teams_json(self):
+    def teams_json(self) -> Path:
         return Path(self.export_path) / "teams.json"
 
     @utils.with_lock
-    def get_teams(self, readonly=False):
+    def get_teams(self, readonly: bool = False) -> tuple[list[dict[str, Any]], ExtractorStats]:
         stats = ExtractorStats()
-        teams = []
+        teams: list[dict[str, Any]] = []
         if self.teams_json.exists():
             LOG.debug("using cached teams")
             teams = json.loads(self.teams_json.read_text())
@@ -600,7 +634,7 @@ class AsanaExtractor:
 
     @cached_property
     @utils.required({"token": "--token", "_workspace": "--workspace", "teamname": "--team"})
-    def team(self):
+    def team(self) -> dict[str, Any]:
         teams, _ = self.get_teams()
         for t in teams:
             if t["name"] == self.teamname:
@@ -609,19 +643,21 @@ class AsanaExtractor:
         raise Exception(f"No team found with name '{self.teamname}'")
 
     @property
-    def export_path_team(self):
+    def export_path_team(self) -> Path:
         return Path(self.export_path) / "teams" / self.team["gid"]
 
     @property
-    def projects_json(self):
+    def projects_json(self) -> Path:
         return self.export_path_team / "projects.json"
 
     @property
-    def projects_dir(self):
+    def projects_dir(self) -> Path:
         return self.export_path_team / "projects"
 
     @utils.required({"teamname": "--team"})
-    def get_projects(self, *args, **kwargs):
+    def get_projects(
+        self, *args: Any, **kwargs: Any
+    ) -> tuple[list[dict[str, Any]], ExtractorStats]:
         """Fetch projects owned by a give team. By default this will get projects
         from the Asana api and add them to the extraction archive.
 
@@ -640,7 +676,9 @@ class AsanaExtractor:
         projects = ap.get(*args, **kwargs)
         return projects, ap.stats
 
-    def get_project_templates(self):
+    def get_project_templates(
+        self,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         root_path = self.projects_dir
         templates_json = root_path / "templates.json"
         if templates_json.exists():
@@ -664,7 +702,9 @@ class AsanaExtractor:
 
         return templates, {}
 
-    def get_project_tasks(self, project, *args, **kwargs):
+    def get_project_tasks(
+        self, project: dict[str, Any], *args: Any, **kwargs: Any
+    ) -> tuple[list[dict[str, Any]], ExtractorStats, set[str] | None]:
         """@param update_from_api: allow fetching from the API."""
         apt = AsanaProjectTasks(
             self.client, project, self.projects_dir, force_update=self.force_update
@@ -672,7 +712,15 @@ class AsanaExtractor:
         tasks = apt.get(*args, **kwargs)
         return tasks, apt.stats, apt.modified_gids
 
-    def get_task_subtasks(self, project, task, event, stats_queue, *args, **kwargs):
+    def get_task_subtasks(
+        self,
+        project: dict[str, Any],
+        task: dict[str, Any],
+        event: threading.Event,
+        stats_queue: queue.Queue[ExtractorStats],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         """@param update_from_api: allow fetching from the API."""
         event.clear()
         atst = AsanaTaskSubTasks(
@@ -683,7 +731,14 @@ class AsanaExtractor:
         event.set()
         stats_queue.put(atst.stats)
 
-    def get_task_stories(self, project, task, stats_queue, *args, **kwargs):
+    def get_task_stories(
+        self,
+        project: dict[str, Any],
+        task: dict[str, Any],
+        stats_queue: queue.Queue[ExtractorStats],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         """@param update_from_api: allow fetching from the API."""
         ats = AsanaProjectTaskStories(
             self.client, project, self.projects_dir, task, force_update=self.force_update
@@ -691,7 +746,14 @@ class AsanaExtractor:
         ats.get(*args, **kwargs)
         stats_queue.put(ats.stats)
 
-    def get_task_attachments(self, project, task, stats_queue, *args, **kwargs):
+    def get_task_attachments(
+        self,
+        project: dict[str, Any],
+        task: dict[str, Any],
+        stats_queue: queue.Queue[ExtractorStats],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         """@param update_from_api: allow fetching from the API."""
         ata = AsanaProjectTaskAttachments(
             self.client, project, self.projects_dir, task, force_update=self.force_update
@@ -699,7 +761,15 @@ class AsanaExtractor:
         ata.get(*args, **kwargs)
         stats_queue.put(ata.stats)
 
-    def get_subtask_attachments(self, project, task, event, stats_queue, *args, **kwargs):
+    def get_subtask_attachments(
+        self,
+        project: dict[str, Any],
+        task: dict[str, Any],
+        event: threading.Event,
+        stats_queue: queue.Queue[ExtractorStats],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         """@param update_from_api: allow fetching from the API."""
         while not event.is_set():
             time.sleep(1)
@@ -733,7 +803,7 @@ class AsanaExtractor:
 
         stats_queue.put(stats)
 
-    def run(self):
+    def run(self) -> None:
         LOG.info("=" * 80)
         LOG.info(f"starting extraction to {self.export_path}")
         start = time.time()
@@ -814,7 +884,7 @@ class AsanaExtractor:
         LOG.info(f"extraction to {self.export_path} completed in {round(end - start, 3)} secs.")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--debug", action="store_true", default=False, help=("enable debug logging")
