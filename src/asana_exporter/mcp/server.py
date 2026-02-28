@@ -22,7 +22,7 @@ from asana_exporter.database.queries import (
 )
 from asana_exporter.database.schema import migrate_schema
 
-_DEFAULT_DB_PATH = Path("asana_export") / "asana.db"
+_DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "asana" / "asana.db"
 _READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
 
 
