@@ -303,7 +303,7 @@ class AsanaProjectTasks(AsanaResourceBase):
 
                 fulltask = asana.TasksApi(self.client).get_task(t["gid"], {})
                 self._export_write_locked(task_json_path, json.dumps(fulltask))
-                existing_by_gid[t["gid"]] = t
+                existing_by_gid[t["gid"]] = fulltask
 
             tasks = list(existing_by_gid.values())
         else:
@@ -395,7 +395,8 @@ class AsanaTaskSubTasks(AsanaResourceBase):
             fulltask = asana.TasksApi(self.client).get_task(t["gid"], {})
             self._export_write_locked(task_json_path, json.dumps(fulltask))
 
-        self._export_write_locked(self._local_store, json.dumps(subtasks))
+        if not readonly:
+            self._export_write_locked(self._local_store, json.dumps(subtasks))
 
         self.stats["num_subtasks"] = len(subtasks)
         return subtasks
@@ -453,7 +454,8 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         for s in stories:
             self._export_write_locked(path / s["gid"], json.dumps(s))
 
-        self._export_write_locked(self._local_store, json.dumps(stories))
+        if not readonly:
+            self._export_write_locked(self._local_store, json.dumps(stories))
         self.stats["num_stories"] = len(stories)
         return stories
 
@@ -543,22 +545,25 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         path = self.root_path / "attachments"
         path.mkdir(parents=True, exist_ok=True)
 
-        attachments = []
+        compact_attachments = []
         for s in asana.AttachmentsApi(self.client).get_attachments_for_object(self.task["gid"], {}):
-            attachments.append(s)
+            compact_attachments.append(s)
 
         # yield
         time.sleep(0)
-        for s in attachments:
+        attachments = []
+        for s in compact_attachments:
             # convert "compact" record to "full"
+            full = asana.AttachmentsApi(self.client).get_attachment(s["gid"], {})
             with (path / s["gid"]).open("w") as fd:
-                s = asana.AttachmentsApi(self.client).get_attachment(s["gid"], {})
-                fd.write(json.dumps(s))
-                url = s["download_url"]
-                if url:
-                    self._download(url, path / f"{s['gid']}_download")
+                fd.write(json.dumps(full))
+            url = full["download_url"]
+            if url:
+                self._download(url, path / f"{full['gid']}_download")
+            attachments.append(full)
 
-        self._export_write_locked(self._local_store, json.dumps(attachments))
+        if not readonly:
+            self._export_write_locked(self._local_store, json.dumps(attachments))
         self.stats["num_attachments"] = len(attachments)
         return attachments
 
@@ -600,10 +605,16 @@ class AsanaExtractor:
             return int(self._workspace)
         except ValueError:
             ws = next(
-                w["gid"]
-                for w in asana.WorkspacesApi(self.client).get_workspaces({})
-                if w["name"] == self._workspace
+                (
+                    w["gid"]
+                    for w in asana.WorkspacesApi(self.client).get_workspaces({})
+                    if w["name"] == self._workspace
+                ),
+                None,
             )
+            if ws is None:
+                msg = f"No workspace found with name '{self._workspace}'"
+                raise ValueError(msg) from None
             LOG.info(f"resolved workspace name '{self._workspace}' to gid '{ws}'")
             return ws
 
@@ -779,11 +790,12 @@ class AsanaExtractor:
         st_obj = AsanaTaskSubTasks(
             self.client, project, self.projects_dir, task, force_update=self.force_update
         )
-        subtasks = st_obj.get()
+        subtasks = st_obj.get(update_from_api=False)
         stats = st_obj.stats
         stats["num_subtask_attachments"] = 0
         if not subtasks:
             LOG.debug("no subtasks to fetch attachments for")
+            stats_queue.put(stats)
             return
 
         attachments = []
