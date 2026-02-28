@@ -1235,6 +1235,31 @@ def main() -> None:
     else:
         ae.run()
 
+    # Auto-import into SQLite after export (for --all-teams or single-team runs)
+    if not args.to_sqlite and not any(
+        [args.list_workspaces, args.list_teams, args.list_projects, args.list_project_tasks]
+    ):
+        import sqlite3
+
+        from asana_exporter.database import (
+            import_export_dir,
+            migrate_schema,
+            rebuild_task_search_fts,
+        )
+
+        db_path = args.db or str(Path(args.export_path) / "asana.db")
+        LOG.info(f"importing JSON from '{args.export_path}' into '{db_path}'")
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            migrate_schema(conn)
+            stats = import_export_dir(conn, args.export_path, force=args.force_update)
+            fts_count = rebuild_task_search_fts(conn)
+            LOG.info(f"import complete: {stats}")
+            LOG.info(f"FTS index: {fts_count} top-level tasks indexed")
+        finally:
+            conn.close()
+
     LOG.info("done.")
 
 
