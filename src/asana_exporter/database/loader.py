@@ -2,10 +2,11 @@
 
 import hashlib
 import json
-import os
 import sqlite3
 import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from asana_exporter.utils import LOG
 
@@ -24,25 +25,31 @@ class ImportStats:
 
     def __str__(self) -> str:
         parts = []
-        for name in ("teams", "projects", "tasks", "subtasks", "stories",
-                      "attachments", "skipped_projects"):
+        for name in (
+            "teams",
+            "projects",
+            "tasks",
+            "subtasks",
+            "stories",
+            "attachments",
+            "skipped_projects",
+        ):
             val = getattr(self, name)
             if val:
                 parts.append(f"{name}={val}")
         return ", ".join(parts) if parts else "nothing imported"
 
 
-def _file_hash(path: str) -> str:
+def _file_hash(path: Path) -> str:
     """SHA-256 hex digest of a file's contents."""
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with path.open("rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
 
 
-def _should_reimport(conn: sqlite3.Connection, source_path: str,
-                     source_hash: str) -> bool:
+def _should_reimport(conn: sqlite3.Connection, source_path: str, source_hash: str) -> bool:
     """Return True if *source_path* is new or has changed since last import."""
     row = conn.execute(
         "SELECT source_hash FROM sync_state WHERE source_path = ?",
@@ -53,8 +60,7 @@ def _should_reimport(conn: sqlite3.Connection, source_path: str,
     return row[0] != source_hash
 
 
-def _update_sync_state(conn: sqlite3.Connection, source_path: str,
-                       source_hash: str) -> None:
+def _update_sync_state(conn: sqlite3.Connection, source_path: str, source_hash: str) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO sync_state (source_path, source_hash, last_import_at) "
         "VALUES (?, ?, ?)",
@@ -72,7 +78,7 @@ def _upsert_user(conn: sqlite3.Connection, user: dict | None) -> None:
     )
 
 
-def _safe_get(data: dict, *keys, default=None):
+def _safe_get(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
     """Safely traverse nested dicts, returning *default* on any miss."""
     obj = data
     for k in keys:
@@ -87,9 +93,13 @@ def _safe_get(data: dict, *keys, default=None):
 # ── Per-entity importers ────────────────────────────────────────────────
 
 
-def _import_task(conn: sqlite3.Connection, task_data: dict,
-                 team: dict, depth: int = 0,
-                 parent_gid: str | None = None) -> None:
+def _import_task(
+    conn: sqlite3.Connection,
+    task_data: dict,
+    team: dict,
+    depth: int = 0,
+    parent_gid: str | None = None,
+) -> None:
     """Insert or replace a single task/subtask row and its memberships."""
     gid = task_data["gid"]
 
@@ -116,7 +126,7 @@ def _import_task(conn: sqlite3.Connection, task_data: dict,
                 first_section = m.get("section") or {}
                 break
 
-    # Sections – upsert every section we see (skip if project not in DB)
+    # Sections - upsert every section we see (skip if project not in DB)
     for m in memberships:
         sec = m.get("section") or {}
         proj = m.get("project") or {}
@@ -128,8 +138,7 @@ def _import_task(conn: sqlite3.Connection, task_data: dict,
             ).fetchone()
             if exists:
                 conn.execute(
-                    "INSERT OR IGNORE INTO sections (gid, project_gid, name) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO sections (gid, project_gid, name) VALUES (?, ?, ?)",
                     (sec["gid"], proj["gid"], sec.get("name", "")),
                 )
 
@@ -186,7 +195,7 @@ def _import_task(conn: sqlite3.Connection, task_data: dict,
             first_section.get("name", ""),
             _safe_get(task_data, "assignee", "gid", default=None),
             _safe_get(task_data, "assignee", "name"),
-            int(bool(task_data.get("completed", False))),
+            int(bool(task_data.get("completed"))),
             task_data.get("completed_at"),
             _safe_get(task_data, "completed_by", "gid", default=None),
             task_data.get("created_at"),
@@ -231,13 +240,11 @@ def _import_task(conn: sqlite3.Connection, task_data: dict,
                 )
 
 
-def _import_stories(conn: sqlite3.Connection, stories_path: str,
-                    task_gid: str) -> int:
+def _import_stories(conn: sqlite3.Connection, stories_path: Path, task_gid: str) -> int:
     """Import stories (comments + events) for a task. Returns count."""
-    if not os.path.exists(stories_path):
+    if not stories_path.exists():
         return 0
-    with open(stories_path) as f:
-        stories = json.loads(f.read())
+    stories = json.loads(stories_path.read_text())
 
     for s in stories:
         _upsert_user(conn, s.get("created_by"))
@@ -261,25 +268,22 @@ def _import_stories(conn: sqlite3.Connection, stories_path: str,
     return len(stories)
 
 
-def _import_attachments(conn: sqlite3.Connection, attachments_dir: str,
-                        task_gid: str) -> int:
+def _import_attachments(conn: sqlite3.Connection, attachments_dir: Path, task_gid: str) -> int:
     """Import attachment metadata for a task. Returns count."""
-    if not os.path.isdir(attachments_dir):
+    if not attachments_dir.is_dir():
         return 0
 
     count = 0
-    for entry in os.listdir(attachments_dir):
+    for att_path in attachments_dir.iterdir():
         # Skip download files (binary blobs)
-        if "_download" in entry:
+        if "_download" in att_path.name:
             continue
-        att_path = os.path.join(attachments_dir, entry)
-        if not os.path.isfile(att_path):
+        if not att_path.is_file():
             continue
         try:
-            with open(att_path) as f:
-                a = json.loads(f.read())
+            a = json.loads(att_path.read_text())
         except (json.JSONDecodeError, UnicodeDecodeError):
-            LOG.debug("skipping non-JSON attachment file: {}".format(att_path))
+            LOG.debug(f"skipping non-JSON attachment file: {att_path}")
             continue
 
         if "gid" not in a:
@@ -313,22 +317,26 @@ def _import_attachments(conn: sqlite3.Connection, attachments_dir: str,
 # ── Task-tree walker ────────────────────────────────────────────────────
 
 
-def _import_task_tree(conn: sqlite3.Connection, task_dir: str,
-                      json_filename: str, team: dict,
-                      depth: int = 0, parent_gid: str | None = None,
-                      stats: ImportStats | None = None) -> None:
+def _import_task_tree(
+    conn: sqlite3.Connection,
+    task_dir: Path,
+    json_filename: str,
+    team: dict,
+    depth: int = 0,
+    parent_gid: str | None = None,
+    stats: ImportStats | None = None,
+) -> None:
     """Import a task and all its subtasks recursively.
 
     *task_dir* is e.g. ``projects/{pid}/tasks/{tid}`` and must contain
     *json_filename* (``task.json`` or ``subtask.json``).
     """
-    task_json_path = os.path.join(task_dir, json_filename)
-    if not os.path.exists(task_json_path):
-        LOG.debug("no {} in {} – skipping".format(json_filename, task_dir))
+    task_json_path = task_dir / json_filename
+    if not task_json_path.exists():
+        LOG.debug(f"no {json_filename} in {task_dir} - skipping")
         return
 
-    with open(task_json_path) as f:
-        task_data = json.loads(f.read())
+    task_data = json.loads(task_json_path.read_text())
 
     gid = task_data["gid"]
     _import_task(conn, task_data, team, depth=depth, parent_gid=parent_gid)
@@ -339,33 +347,35 @@ def _import_task_tree(conn: sqlite3.Connection, task_dir: str,
             stats.subtasks += 1
 
     # Stories
-    stories_path = os.path.join(task_dir, "stories.json")
-    n = _import_stories(conn, stories_path, gid)
+    n = _import_stories(conn, task_dir / "stories.json", gid)
     if stats:
         stats.stories += n
 
     # Attachments (individual JSON files in attachments/ dir)
-    attachments_dir = os.path.join(task_dir, "attachments")
-    n = _import_attachments(conn, attachments_dir, gid)
+    n = _import_attachments(conn, task_dir / "attachments", gid)
     if stats:
         stats.attachments += n
 
     # Subtasks (recursive)
-    subtasks_dir = os.path.join(task_dir, "subtasks")
-    if os.path.isdir(subtasks_dir):
-        for sub_gid in os.listdir(subtasks_dir):
-            sub_dir = os.path.join(subtasks_dir, sub_gid)
-            if os.path.isdir(sub_dir):
-                _import_task_tree(conn, sub_dir, "subtask.json", team,
-                                  depth=depth + 1, parent_gid=gid,
-                                  stats=stats)
+    subtasks_dir = task_dir / "subtasks"
+    if subtasks_dir.is_dir():
+        for sub_dir in subtasks_dir.iterdir():
+            if sub_dir.is_dir():
+                _import_task_tree(
+                    conn,
+                    sub_dir,
+                    "subtask.json",
+                    team,
+                    depth=depth + 1,
+                    parent_gid=gid,
+                    stats=stats,
+                )
 
 
 # ── Project / team / top-level importers ────────────────────────────────
 
 
-def _upsert_project(conn: sqlite3.Connection, project_data: dict,
-                    team: dict) -> None:
+def _upsert_project(conn: sqlite3.Connection, project_data: dict, team: dict) -> None:
     """Insert or update a project record."""
     conn.execute(
         """INSERT OR REPLACE INTO projects (
@@ -376,7 +386,7 @@ def _upsert_project(conn: sqlite3.Connection, project_data: dict,
             project_data["gid"],
             project_data.get("name", ""),
             team.get("gid"),
-            int(bool(project_data.get("archived", False))),
+            int(bool(project_data.get("archived"))),
             project_data.get("description") or project_data.get("notes", ""),
             _safe_get(project_data, "owner", "gid", default=None),
             project_data.get("created_at"),
@@ -387,45 +397,50 @@ def _upsert_project(conn: sqlite3.Connection, project_data: dict,
     )
 
 
-def _import_project_tasks(conn: sqlite3.Connection, project_data: dict,
-                          project_dir: str, team: dict, force: bool,
-                          stats: ImportStats) -> None:
+def _import_project_tasks(
+    conn: sqlite3.Connection,
+    project_data: dict,
+    project_dir: Path,
+    team: dict,
+    force: bool,
+    stats: ImportStats,
+) -> None:
     """Import all tasks for a single project (project record must exist)."""
-    tasks_json = os.path.join(project_dir, "tasks.json")
-    if not os.path.exists(tasks_json):
-        LOG.debug("no tasks.json in {} – skipping project".format(project_dir))
+    tasks_json = project_dir / "tasks.json"
+    if not tasks_json.exists():
+        LOG.debug(f"no tasks.json in {project_dir} - skipping project")
         return
 
     # Hash-based change detection (per-project granularity)
     source_hash = _file_hash(tasks_json)
-    rel_path = tasks_json  # absolute path as key is fine
+    rel_path = str(tasks_json)  # absolute path as key is fine
     if not force and not _should_reimport(conn, rel_path, source_hash):
-        LOG.debug("project '{}' unchanged – skipping".format(
-            project_data.get("name")))
+        LOG.debug(f"project '{project_data.get('name')}' unchanged - skipping")
         stats.skipped_projects += 1
         return
 
     stats.projects += 1
 
     # Walk individual task directories
-    tasks_dir = os.path.join(project_dir, "tasks")
-    if not os.path.isdir(tasks_dir):
+    tasks_dir = project_dir / "tasks"
+    if not tasks_dir.is_dir():
         _update_sync_state(conn, rel_path, source_hash)
         conn.commit()
         return
 
-    for task_gid_dir in os.listdir(tasks_dir):
-        task_dir = os.path.join(tasks_dir, task_gid_dir)
-        if os.path.isdir(task_dir):
-            _import_task_tree(conn, task_dir, "task.json", team,
-                              depth=0, parent_gid=None, stats=stats)
+    for task_dir in tasks_dir.iterdir():
+        if task_dir.is_dir():
+            _import_task_tree(
+                conn, task_dir, "task.json", team, depth=0, parent_gid=None, stats=stats
+            )
 
     _update_sync_state(conn, rel_path, source_hash)
     conn.commit()
 
 
-def _import_team(conn: sqlite3.Connection, team_data: dict, team_dir: str,
-                 force: bool, stats: ImportStats) -> None:
+def _import_team(
+    conn: sqlite3.Connection, team_data: dict, team_dir: Path, force: bool, stats: ImportStats
+) -> None:
     """Import all projects for a single team."""
     conn.execute(
         "INSERT OR REPLACE INTO teams (gid, name) VALUES (?, ?)",
@@ -433,28 +448,26 @@ def _import_team(conn: sqlite3.Connection, team_data: dict, team_dir: str,
     )
     stats.teams += 1
 
-    projects_json = os.path.join(team_dir, "projects.json")
-    if not os.path.exists(projects_json):
-        LOG.debug("no projects.json in {}".format(team_dir))
+    projects_json = team_dir / "projects.json"
+    if not projects_json.exists():
+        LOG.debug(f"no projects.json in {team_dir}")
         conn.commit()
         return
 
-    with open(projects_json) as f:
-        projects = json.loads(f.read())
+    projects = json.loads(projects_json.read_text())
 
     # Pass 1: insert all project records (so FK references work for
     # tasks that belong to multiple projects)
-    projects_dir = os.path.join(team_dir, "projects")
+    projects_dir = team_dir / "projects"
     for p in projects:
         _upsert_project(conn, p, team_data)
     conn.commit()
 
     # Pass 2: import tasks per project
     for p in projects:
-        project_dir = os.path.join(projects_dir, p["gid"])
-        if os.path.isdir(project_dir):
-            _import_project_tasks(conn, p, project_dir, team_data, force,
-                                  stats)
+        project_dir = projects_dir / p["gid"]
+        if project_dir.is_dir():
+            _import_project_tasks(conn, p, project_dir, team_data, force, stats)
 
     conn.commit()
 
@@ -462,8 +475,9 @@ def _import_team(conn: sqlite3.Connection, team_data: dict, team_dir: str,
 # ── Public entry point ──────────────────────────────────────────────────
 
 
-def import_export_dir(conn: sqlite3.Connection, export_path: str,
-                      force: bool = False) -> ImportStats:
+def import_export_dir(
+    conn: sqlite3.Connection, export_path: str, force: bool = False
+) -> ImportStats:
     """Walk an asana-exporter JSON tree and load it into SQLite.
 
     Args:
@@ -475,20 +489,19 @@ def import_export_dir(conn: sqlite3.Connection, export_path: str,
         ImportStats with counts of imported entities.
     """
     stats = ImportStats()
+    root = Path(export_path)
 
-    teams_json = os.path.join(export_path, "teams.json")
-    if not os.path.exists(teams_json):
-        LOG.info("no teams.json found in {} – nothing to import".format(
-            export_path))
+    teams_json = root / "teams.json"
+    if not teams_json.exists():
+        LOG.info(f"no teams.json found in {export_path} - nothing to import")
         return stats
 
-    with open(teams_json) as f:
-        teams = json.loads(f.read())
+    teams = json.loads(teams_json.read_text())
 
-    teams_dir = os.path.join(export_path, "teams")
+    teams_dir = root / "teams"
     for t in teams:
-        team_dir = os.path.join(teams_dir, t["gid"])
-        if os.path.isdir(team_dir):
+        team_dir = teams_dir / t["gid"]
+        if team_dir.is_dir():
             _import_team(conn, t, team_dir, force, stats)
 
     return stats
