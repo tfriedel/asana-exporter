@@ -18,7 +18,7 @@ requires = ["hatchling", "uv-dynamic-versioning"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["asana_exporter"]
+packages = ["src/asana_exporter"]
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
@@ -116,7 +116,7 @@ ignore_missing_imports = true
 check_untyped_defs = true
 
 [tool.coverage.run]
-source = ["asana_exporter"]
+source = ["src"]
 omit = ["tests/*", "*/__init__.py"]
 
 [tool.coverage.report]
