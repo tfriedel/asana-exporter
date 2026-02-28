@@ -622,6 +622,89 @@ class AsanaExtractor:
     def teams_json(self) -> Path:
         return Path(self.export_path) / "teams.json"
 
+    @property
+    def global_sync_meta_path(self) -> Path:
+        """Path to the workspace-level sync metadata file."""
+        return Path(self.export_path) / ".global_sync_meta.json"
+
+    def load_global_sync_meta(self) -> dict[str, Any] | None:
+        """Load workspace-level sync metadata.
+
+        Returns:
+            Parsed metadata dict if valid, or None if the file does not
+            exist or contains corrupt/incomplete data.
+        """
+        path = self.global_sync_meta_path
+        if not path.exists():
+            return None
+        try:
+            meta = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            LOG.warning("corrupt global sync metadata, will do full sync")
+            return None
+        if "last_sync" not in meta:
+            LOG.warning("global sync metadata missing last_sync, will do full sync")
+            return None
+        return meta
+
+    def save_global_sync_meta(self, timestamp: str) -> None:
+        """Save workspace-level sync metadata.
+
+        Args:
+            timestamp: ISO 8601 timestamp of the sync start time.
+        """
+        meta = {"last_sync": timestamp, "version": 1}
+        self.global_sync_meta_path.write_text(json.dumps(meta))
+
+    def search_modified_tasks_global(self) -> dict[str, set[str]] | None:
+        """Check for workspace-wide changes using premium search API.
+
+        Returns:
+            dict mapping project GID → set of modified task GIDs, or
+            None if full sync is needed (first run, non-premium, or error).
+        """
+        meta = self.load_global_sync_meta()
+        if meta is None:
+            LOG.info("no global sync metadata, will do full sync")
+            return None
+
+        last_sync = meta["last_sync"]
+        LOG.info(f"pre-flight: checking workspace for changes since {last_sync}")
+        try:
+            results = list(
+                asana.TasksApi(self.client).search_tasks_for_workspace(
+                    str(self.workspace),
+                    {
+                        "modified_at.after": last_sync,
+                        "opt_fields": "memberships.project.gid",
+                    },
+                )
+            )
+        except asana.rest.ApiException as e:
+            if e.status == 402:
+                LOG.warning(
+                    "search_tasks_for_workspace requires premium, "
+                    "falling back to per-project sync"
+                )
+                return None
+            raise
+
+        modified_by_project: dict[str, set[str]] = {}
+        for task in results:
+            task_gid = task["gid"]
+            memberships = task.get("memberships", [])
+            for m in memberships:
+                project = m.get("project") or {}
+                project_gid = project.get("gid")
+                if project_gid:
+                    modified_by_project.setdefault(project_gid, set()).add(task_gid)
+
+        LOG.info(
+            f"pre-flight: {len(results)} modified tasks across "
+            f"{len(modified_by_project)} projects"
+        )
+        return modified_by_project
+
     @utils.with_lock
     def get_teams(self, readonly: bool = False) -> tuple[list[dict[str, Any]], ExtractorStats]:
         stats = ExtractorStats()
@@ -815,7 +898,13 @@ class AsanaExtractor:
 
         stats_queue.put(stats)
 
-    def run(self) -> None:
+    def run(self, changed_project_gids: set[str] | None = None) -> None:
+        """Extract projects, tasks, and sub-resources for this team.
+
+        Args:
+            changed_project_gids: If provided, only sync projects whose GID is
+                in this set.  None means sync all projects.
+        """
         LOG.info("=" * 80)
         LOG.info(f"starting extraction to {self.export_path}")
         start = time.time()
@@ -824,10 +913,40 @@ class AsanaExtractor:
 
         self.get_project_templates()
         projects, stats = self.get_projects(prefer_cache=False)
-        stats_queue = queue.Queue()
-        for p in projects:
+        stats_queue: queue.Queue[ExtractorStats] = queue.Queue()
+
+        # Filter to only changed projects when pre-flight data is available
+        if changed_project_gids is not None:
+            projects_to_sync = [p for p in projects if p["gid"] in changed_project_gids]
+            if len(projects_to_sync) < len(projects):
+                LOG.info(
+                    f"pre-flight: syncing {len(projects_to_sync)}/{len(projects)} "
+                    f"changed projects"
+                )
+        else:
+            projects_to_sync = projects
+
+        # Phase 1: Fetch tasks for all projects concurrently
+        project_results: list[
+            tuple[dict[str, Any], list[dict[str, Any]], ExtractorStats, set[str] | None]
+        ] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_project = {
+                executor.submit(self.get_project_tasks, p, prefer_cache=False): p
+                for p in projects_to_sync
+            }
+            for future in concurrent.futures.as_completed(future_to_project):
+                p = future_to_project[future]
+                try:
+                    tasks, task_stats, modified_gids = future.result()
+                except Exception:
+                    LOG.exception(f"failed to fetch tasks for project '{p['name']}', skipping")
+                    continue
+                project_results.append((p, tasks, task_stats, modified_gids))
+
+        # Phase 2: Process sub-resources for projects with modified tasks
+        for p, tasks, task_stats, modified_gids in project_results:
             LOG.info(f"extracting project {p['name']}")
-            tasks, task_stats, modified_gids = self.get_project_tasks(p, prefer_cache=False)
             stats.combine(task_stats)
 
             # Determine which tasks need sub-resource refresh
@@ -886,7 +1005,7 @@ class AsanaExtractor:
                 for job in concurrent.futures.as_completed(jobs):
                     job.result()
 
-        LOG.info(f"completed extraction of {len(projects)} projects.")
+        LOG.info(f"completed extraction of {len(projects_to_sync)} projects.")
         while not stats_queue.empty():
             item = stats_queue.get()
             stats.combine(item)
@@ -1084,18 +1203,35 @@ def main() -> None:
             )
     elif args.all_teams:
         teams, _ = ae.get_teams()
-        for t in teams:
-            LOG.info(f"exporting team '{t['name']}'")
-            team_ae = AsanaExtractor(
-                token=args.token,
-                workspace=args.workspace,
-                teamname=t["name"],
-                export_path=args.export_path,
-                project_include_filter=args.project_filter,
-                project_exclude_filter=args.exclude_projects,
-                force_update=args.force_update,
+        workspace_gid = str(ae.workspace)  # Resolve once, reuse for all teams
+        sync_start = datetime.datetime.now(datetime.UTC).isoformat()
+
+        # Pre-flight: one API call to find all workspace-wide changes
+        if not args.force_update:
+            modified_by_project = ae.search_modified_tasks_global()
+        else:
+            modified_by_project = None
+
+        if modified_by_project is not None and len(modified_by_project) == 0:
+            LOG.info("no workspace-wide changes since last sync, skipping all teams")
+            ae.save_global_sync_meta(sync_start)
+        else:
+            changed_project_gids = (
+                set(modified_by_project.keys()) if modified_by_project is not None else None
             )
-            team_ae.run()
+            for t in teams:
+                LOG.info(f"exporting team '{t['name']}'")
+                team_ae = AsanaExtractor(
+                    token=args.token,
+                    workspace=workspace_gid,
+                    teamname=t["name"],
+                    export_path=args.export_path,
+                    project_include_filter=args.project_filter,
+                    project_exclude_filter=args.exclude_projects,
+                    force_update=args.force_update,
+                )
+                team_ae.run(changed_project_gids=changed_project_gids)
+            ae.save_global_sync_meta(sync_start)
     else:
         ae.run()
 
