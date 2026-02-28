@@ -8,10 +8,12 @@ requires-python = ">=3.13"
 dependencies = [
     "asana",
     "loguru>=0.7.0",
+    "mcp[cli]>=1.9.0",
 ]
 
 [project.scripts]
 asana-exporter = "asana_exporter.client:main"
+asana-mcp = "asana_exporter.mcp.server:run_mcp_server"
 
 [build-system]
 requires = ["hatchling", "uv-dynamic-versioning"]
@@ -99,6 +101,7 @@ unfixable = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "src/asana_exporter/database/schema.py" = ["E501"]
+"src/asana_exporter/mcp/server.py" = ["RUF029", "D417"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

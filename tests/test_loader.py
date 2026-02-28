@@ -2,175 +2,11 @@
 
 import json
 import sqlite3
-from collections.abc import Generator
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from asana_exporter.database.loader import import_export_dir
-from asana_exporter.database.schema import create_schema, rebuild_task_search_fts
-
-# ── Fixture helpers ─────────────────────────────────────────────────────
-
-
-def _write_json(path: str | Path, data: Any) -> None:
-    p = Path(path)
-    p.parent.mkdir(exist_ok=True, parents=True)
-    p.write_text(json.dumps(data))
-
-
-def _make_task(
-    gid: str,
-    name: str,
-    project_gid: str = "proj1",
-    project_name: str = "Project One",
-    section_gid: str = "sec1",
-    section_name: str = "To Do",
-    assignee: dict[str, str] | None = None,
-    **extra: Any,
-) -> dict[str, Any]:
-    """Build a realistic Asana task dict."""
-    task: dict[str, Any] = {
-        "gid": gid,
-        "name": name,
-        "notes": extra.pop("notes", ""),
-        "html_notes": extra.pop("html_notes", ""),
-        "resource_subtype": "default_task",
-        "assignee": assignee,
-        "memberships": [
-            {
-                "project": {"gid": project_gid, "name": project_name},
-                "section": {"gid": section_gid, "name": section_name},
-            }
-        ],
-        "completed": extra.pop("completed", False),
-        "completed_at": None,
-        "completed_by": None,
-        "created_at": "2024-01-15T10:00:00.000Z",
-        "created_by": {"gid": "user1", "name": "Alice"},
-        "modified_at": "2024-01-16T12:00:00.000Z",
-        "due_on": None,
-        "due_at": None,
-        "start_on": None,
-        "start_at": None,
-        "num_likes": 0,
-        "permalink_url": f"https://app.asana.com/0/{project_gid}/{gid}",
-        "tags": extra.pop("tags", []),
-        "custom_fields": extra.pop("custom_fields", []),
-        "dependencies": [],
-        "dependents": [],
-        "followers": [{"gid": "user1", "name": "Alice"}],
-    }
-    task.update(extra)
-    return task
-
-
-def _make_story(gid: str, text: str, resource_subtype: str = "comment") -> dict[str, Any]:
-    return {
-        "gid": gid,
-        "text": text,
-        "html_text": f"<p>{text}</p>",
-        "created_at": "2024-01-15T11:00:00.000Z",
-        "created_by": {"gid": "user2", "name": "Bob"},
-        "resource_subtype": resource_subtype,
-        "type": resource_subtype,
-    }
-
-
-def _make_attachment(gid: str, name: str) -> dict[str, Any]:
-    return {
-        "gid": gid,
-        "name": name,
-        "file_name": name,
-        "host": "asana",
-        "size": 1024,
-        "created_at": "2024-01-15T12:00:00.000Z",
-        "download_url": f"https://example.com/dl/{gid}",
-        "permanent_url": f"https://example.com/perm/{gid}",
-        "created_by": {"gid": "user1", "name": "Alice"},
-    }
-
-
-def _build_export_tree(
-    root: str,
-    teams: list[dict[str, Any]] | None = None,
-    projects: dict[str, list[dict[str, Any]]] | None = None,
-    tasks: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
-    stories: dict[str, list[dict[str, Any]]] | None = None,
-    subtasks: dict[str, list[tuple[dict[str, Any], list[dict[str, Any]]]]] | None = None,
-    attachments: dict[str, list[dict[str, Any]]] | None = None,
-) -> None:
-    """Build a minimal export directory tree.
-
-    Args:
-        root: Temp directory root.
-        teams: List of team dicts.
-        projects: Dict mapping team_gid -> list of project dicts.
-        tasks: Dict mapping (team_gid, project_gid) -> list of task dicts.
-        stories: Dict mapping task_gid -> list of story dicts.
-        subtasks: Dict mapping task_gid -> list of (subtask_dict, subtask_stories) pairs.
-        attachments: Dict mapping task_gid -> list of attachment dicts.
-    """
-    teams = teams or [{"gid": "team1", "name": "Engineering"}]
-    projects = projects or {"team1": [{"gid": "proj1", "name": "Project One"}]}
-    tasks = tasks or {}
-    stories = stories or {}
-    subtasks = subtasks or {}
-    attachments = attachments or {}
-
-    root_path = Path(root)
-    _write_json(root_path / "teams.json", teams)
-
-    for team in teams:
-        tgid = team["gid"]
-        team_dir = root_path / "teams" / tgid
-        _write_json(team_dir / "projects.json", projects.get(tgid, []))
-
-        for proj in projects.get(tgid, []):
-            pgid = proj["gid"]
-            proj_dir = team_dir / "projects" / pgid
-
-            # tasks.json (summary list)
-            task_list = tasks.get((tgid, pgid), [])
-            _write_json(
-                proj_dir / "tasks.json",
-                [{"gid": t["gid"], "name": t["name"]} for t in task_list],
-            )
-
-            # Individual task directories
-            for task in task_list:
-                task_dir = proj_dir / "tasks" / task["gid"]
-                _write_json(task_dir / "task.json", task)
-
-                # Stories
-                if task["gid"] in stories:
-                    _write_json(task_dir / "stories.json", stories[task["gid"]])
-
-                # Attachments (individual files in attachments/ dir)
-                if task["gid"] in attachments:
-                    att_dir = task_dir / "attachments"
-                    for att in attachments[task["gid"]]:
-                        _write_json(att_dir / att["gid"], att)
-
-                # Subtasks
-                if task["gid"] in subtasks:
-                    for sub, sub_stories in subtasks[task["gid"]]:
-                        sub_dir = task_dir / "subtasks" / sub["gid"]
-                        _write_json(sub_dir / "subtask.json", sub)
-                        if sub_stories:
-                            _write_json(sub_dir / "stories.json", sub_stories)
-
-
-@pytest.fixture
-def db() -> Generator[sqlite3.Connection]:
-    """In-memory SQLite connection with schema."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = ON")
-    create_schema(conn)
-    yield conn
-    conn.close()
-
+from asana_exporter.database.schema import rebuild_task_search_fts
+from tests.factories import build_export_tree, make_attachment, make_story, make_task
 
 # ── Tests ───────────────────────────────────────────────────────────────
 
@@ -184,8 +20,8 @@ class TestBasicImport:
 
     def test_single_task(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Import one team, one project, one task."""
-        task = _make_task("t1", "Fix the bug")
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        task = make_task("t1", "Fix the bug")
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         stats = import_export_dir(db, str(tmp_path))
         assert stats.teams == 1
@@ -201,9 +37,9 @@ class TestBasicImport:
 
     def test_task_with_stories(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Stories are imported and linked to their task."""
-        task = _make_task("t1", "Task with comments")
-        story = _make_story("s1", "Looks good to me!")
-        _build_export_tree(
+        task = make_task("t1", "Task with comments")
+        story = make_story("s1", "Looks good to me!")
+        build_export_tree(
             str(tmp_path), tasks={("team1", "proj1"): [task]}, stories={"t1": [story]}
         )
 
@@ -215,9 +51,9 @@ class TestBasicImport:
 
     def test_task_with_attachments(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Attachment metadata is imported."""
-        task = _make_task("t1", "Task with file")
-        att = _make_attachment("a1", "screenshot.png")
-        _build_export_tree(
+        task = make_task("t1", "Task with file")
+        att = make_attachment("a1", "screenshot.png")
+        build_export_tree(
             str(tmp_path), tasks={("team1", "proj1"): [task]}, attachments={"t1": [att]}
         )
 
@@ -229,11 +65,11 @@ class TestBasicImport:
 
     def test_task_with_subtasks(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Subtasks get parent_gid and depth set correctly."""
-        task = _make_task("t1", "Parent task")
-        subtask = _make_task("st1", "Child task", assignee={"gid": "user3", "name": "Charlie"})
-        sub_story = _make_story("ss1", "Subtask comment")
+        task = make_task("t1", "Parent task")
+        subtask = make_task("st1", "Child task", assignee={"gid": "user3", "name": "Charlie"})
+        sub_story = make_story("ss1", "Subtask comment")
 
-        _build_export_tree(
+        build_export_tree(
             str(tmp_path),
             tasks={("team1", "proj1"): [task]},
             subtasks={"t1": [(subtask, [sub_story])]},
@@ -253,8 +89,8 @@ class TestBasicImport:
 class TestIncrementalImport:
     def test_skip_unchanged_project(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Second import skips unchanged projects."""
-        task = _make_task("t1", "Stable task")
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        task = make_task("t1", "Stable task")
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         stats1 = import_export_dir(db, str(tmp_path))
         assert stats1.projects == 1
@@ -266,8 +102,8 @@ class TestIncrementalImport:
 
     def test_reimport_changed_project(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Changing tasks.json causes reimport."""
-        task = _make_task("t1", "Original name")
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        task = make_task("t1", "Original name")
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         import_export_dir(db, str(tmp_path))
 
@@ -281,8 +117,8 @@ class TestIncrementalImport:
 
     def test_force_reimport(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """--force bypasses hash check."""
-        task = _make_task("t1", "Task")
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        task = make_task("t1", "Task")
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         import_export_dir(db, str(tmp_path))
         stats = import_export_dir(db, str(tmp_path), force=True)
@@ -293,8 +129,8 @@ class TestIncrementalImport:
 class TestUserExtraction:
     def test_users_from_task_fields(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Users are extracted from assignee, created_by, etc."""
-        task = _make_task("t1", "Task", assignee={"gid": "u1", "name": "Eve"})
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        task = make_task("t1", "Task", assignee={"gid": "u1", "name": "Eve"})
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         import_export_dir(db, str(tmp_path))
 
@@ -308,13 +144,13 @@ class TestUserExtraction:
 class TestFTSIntegration:
     def test_per_entity_fts(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """FTS triggers populate tasks_fts on insert."""
-        task = _make_task(
+        task = make_task(
             "t1",
             "Deploy the widget",
             notes="We need to deploy ASAP",
             tags=[{"gid": "tag1", "name": "urgent"}],
         )
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         import_export_dir(db, str(tmp_path))
 
@@ -328,11 +164,11 @@ class TestFTSIntegration:
 
     def test_holistic_fts_rebuild(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """rebuild_task_search_fts aggregates subtask and comment text."""
-        task = _make_task("t1", "Parent")
-        subtask = _make_task("st1", "Investigate memory leak")
-        comment = _make_story("s1", "Found the root cause in allocator")
+        task = make_task("t1", "Parent")
+        subtask = make_task("st1", "Investigate memory leak")
+        comment = make_story("s1", "Found the root cause in allocator")
 
-        _build_export_tree(
+        build_export_tree(
             str(tmp_path),
             tasks={("team1", "proj1"): [task]},
             subtasks={"t1": [(subtask, [comment])]},
@@ -360,7 +196,7 @@ class TestFTSIntegration:
 class TestTaskMemberships:
     def test_memberships_stored(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Task memberships are stored for projects that exist in the DB."""
-        task = _make_task("t1", "Multi-project task")
+        task = make_task("t1", "Multi-project task")
         # Add a second membership for a project NOT in our export
         task["memberships"].append(
             {
@@ -368,7 +204,7 @@ class TestTaskMemberships:
                 "section": {"gid": "sec2", "name": "In Progress"},
             }
         )
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         import_export_dir(db, str(tmp_path))
 
@@ -384,14 +220,14 @@ class TestTaskMemberships:
         self, db: sqlite3.Connection, tmp_path: Path
     ) -> None:
         """Both memberships stored when both projects are in the export."""
-        task = _make_task("t1", "Multi-project task")
+        task = make_task("t1", "Multi-project task")
         task["memberships"].append(
             {
                 "project": {"gid": "proj2", "name": "Project Two"},
                 "section": {"gid": "sec2", "name": "In Progress"},
             }
         )
-        _build_export_tree(
+        build_export_tree(
             str(tmp_path),
             projects={
                 "team1": [
@@ -419,8 +255,8 @@ class TestTaskMemberships:
 class TestSections:
     def test_sections_extracted(self, db: sqlite3.Connection, tmp_path: Path) -> None:
         """Sections are extracted from task memberships."""
-        task = _make_task("t1", "Task in section")
-        _build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
+        task = make_task("t1", "Task in section")
+        build_export_tree(str(tmp_path), tasks={("team1", "proj1"): [task]})
 
         import_export_dir(db, str(tmp_path))
 
