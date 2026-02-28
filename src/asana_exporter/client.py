@@ -624,21 +624,35 @@ class AsanaExtractor:
 
     @property
     def global_sync_meta_path(self) -> Path:
+        """Path to the workspace-level sync metadata file."""
         return Path(self.export_path) / ".global_sync_meta.json"
 
     def load_global_sync_meta(self) -> dict[str, Any] | None:
-        """Load workspace-level sync metadata."""
+        """Load workspace-level sync metadata.
+
+        Returns:
+            Parsed metadata dict if valid, or None if the file does not
+            exist or contains corrupt/incomplete data.
+        """
         path = self.global_sync_meta_path
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text())
-        except (json.JSONDecodeError, KeyError):
+            meta = json.loads(path.read_text())
+        except json.JSONDecodeError:
             LOG.warning("corrupt global sync metadata, will do full sync")
             return None
+        if "last_sync" not in meta:
+            LOG.warning("global sync metadata missing last_sync, will do full sync")
+            return None
+        return meta
 
     def save_global_sync_meta(self, timestamp: str) -> None:
-        """Save workspace-level sync metadata."""
+        """Save workspace-level sync metadata.
+
+        Args:
+            timestamp: ISO 8601 timestamp of the sync start time.
+        """
         meta = {"last_sync": timestamp, "version": 1}
         self.global_sync_meta_path.write_text(json.dumps(meta))
 
@@ -680,7 +694,7 @@ class AsanaExtractor:
             task_gid = task["gid"]
             memberships = task.get("memberships", [])
             for m in memberships:
-                project = m.get("project", {})
+                project = m.get("project") or {}
                 project_gid = project.get("gid")
                 if project_gid:
                     modified_by_project.setdefault(project_gid, set()).add(task_gid)
@@ -885,6 +899,12 @@ class AsanaExtractor:
         stats_queue.put(stats)
 
     def run(self, changed_project_gids: set[str] | None = None) -> None:
+        """Extract projects, tasks, and sub-resources for this team.
+
+        Args:
+            changed_project_gids: If provided, only sync projects whose GID is
+                in this set.  None means sync all projects.
+        """
         LOG.info("=" * 80)
         LOG.info(f"starting extraction to {self.export_path}")
         start = time.time()
@@ -917,7 +937,11 @@ class AsanaExtractor:
             }
             for future in concurrent.futures.as_completed(future_to_project):
                 p = future_to_project[future]
-                tasks, task_stats, modified_gids = future.result()
+                try:
+                    tasks, task_stats, modified_gids = future.result()
+                except Exception:
+                    LOG.exception(f"failed to fetch tasks for project '{p['name']}', skipping")
+                    continue
                 project_results.append((p, tasks, task_stats, modified_gids))
 
         # Phase 2: Process sub-resources for projects with modified tasks
@@ -981,7 +1005,7 @@ class AsanaExtractor:
                 for job in concurrent.futures.as_completed(jobs):
                     job.result()
 
-        LOG.info(f"completed extraction of {len(projects)} projects.")
+        LOG.info(f"completed extraction of {len(projects_to_sync)} projects.")
         while not stats_queue.empty():
             item = stats_queue.get()
             stats.combine(item)
