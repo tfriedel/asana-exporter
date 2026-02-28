@@ -1,0 +1,523 @@
+{
+  "name": "Asana:create_project_preview",
+  "description": "Generate a visual preview of a project structure before creation. Use anytime the user asks to create a project or draft a project. Use this when you want the user to review and confirm the project structure first.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "project_name": {
+        "description": "Name of the project to create.",
+        "type": "string"
+      },
+      "sections": {
+        "description": "Users will give you a request to create a project with a certain purpose. Use your own knowledge of project management and the principles and guidance below to design the best project structure possible.\n\nJSON array of section objects. Each section must have:\n- sectionName (string): Name of the section.\n- tasks (array): Array of task objects.\n\nEach task object must have:\n- taskName (string): Name of the task.\n- description (string | null): Description of the task, or null if the task has no description. Defaults to null if not provided.\n- isComplete (boolean): Whether the task is completed. Defaults to false if not provided.\n- startDate (string | null): Start date of the task in YYYY-MM-DD format, or null if the task has no start date. If the start date is provided, the due date must also be provided. If both the start date and due date are provided, the due date must be greater than or equal to the start date. Defaults to null if not provided.\n- dueDate (string | null): Due date of the task in YYYY-MM-DD format, or null if the task has no due date. If both the start date and due date are provided, the due date must be greater than or equal to the start date. Defaults to null if not provided.\n- assignee (string | null): Assignee of the task, or null if the task is unassigned. This can be \"me\", an email, or a user GID chosen among those found using asana_get_workspace_users. Defaults to null if not provided.\n- priority (\"low\" | \"medium\" | \"high\" | null): Priority level of the task. Must be one of 'low', 'medium', 'high', or null. Defaults to null if not provided.\n\nThis is general guidance for creating good project structures. Follow these principles and guidance as closely as possible unless the user specifically asks you to do otherwise:\nCreate the project structure in the same language as the user's request.\n\n- Project should have >=4 sections.\n\n- Limit the number of tasks to no more than 5 tasks per section.\n\n- Limit sections up to 6.\n\n- Every section should have at least one task.\n\n- If the user does not specifically give you tasks they want to include in their project, make tasks for the project that are aligned with the project's purpose.\n\n- Only mark tasks as complete (isComplete: true) if the user specifically mentioned they already completed that work. Otherwise, all tasks should be incomplete (isComplete: false).\n\n- When adding dates to tasks, always provide BOTH startDate and dueDate together as a date range. Never provide only dueDate without startDate. Add date ranges to several tasks so they will be useful for timeline and calendar views when the project is created.\n\n- All dates must be in the future (today or later), never in the past.\n\n- Create logical, sequential timelines that make sense for the project's purpose. Tasks should progress in a meaningful order (e.g., beginner tasks before advanced tasks, setup tasks before execution tasks).\n\n- Dates should form a coherent timeline, not be randomly scattered.\n\n- Prefer including the 'priority' custom field for every task (one of 'low', 'medium', or 'high'), unless the user has specifically instructed you not to. This helps users organize their work by importance.\n\nExample:\n[\n  {\n    \"sectionName\": \"Backlog\",\n    \"tasks\": [\n      {\n        \"taskName\": \"Design homepage\",\n        \"description\": \"Create a modern and responsive homepage design\",\n        \"isComplete\": false,\n        \"startDate\": \"2025-01-10\",\n        \"dueDate\": \"2025-01-15\",\n        \"assignee\": \"123456789\",\n        \"priority\": \"high\"\n      },\n      {\n        \"taskName\": \"Write documentation\",\n        \"description\": null,\n        \"isComplete\": false,\n        \"startDate\": \"2025-01-15\",\n        \"dueDate\": \"2025-01-20\",\n        \"assignee\": \"987654321\",\n        \"priority\": \"medium\"\n      }\n    ]\n  },\n  {\n    \"sectionName\": \"In Progress\",\n    \"tasks\": [\n      {\n        \"taskName\": \"Implement API endpoints\",\n        \"description\": \"Build RESTful API endpoints for user management\",\n        \"isComplete\": false,\n        \"startDate\": \"2025-01-10\",\n        \"dueDate\": \"2025-01-25\",\n        \"assignee\": \"123456789\",\n        \"priority\": \"high\"\n      },\n      {\n        \"taskName\": \"Code review\",\n        \"description\": null,\n        \"isComplete\": false,\n        \"startDate\": \"2025-01-25\",\n        \"dueDate\": \"2025-01-30\",\n        \"assignee\": null,\n        \"priority\": \"medium\"\n      },\n      {\n        \"taskName\": \"Deploy to staging\",\n        \"description\": \"Deploy the latest version to staging environment\",\n        \"isComplete\": false,\n        \"startDate\": \"2025-01-05\",\n        \"dueDate\": \"2025-01-08\",\n        \"assignee\": \"987654321\",\n        \"priority\": \"high\"\n      }\n    ]\n  }\n]",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "sectionName": {
+              "description": "Name of the section.",
+              "type": "string"
+            },
+            "tasks": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "assignee": {
+                    "description": "Assignee of the task, or null if the task is unassigned. This can be \"me\", an email, or a user GID chosen among those found using asana_get_workspace_users. Defaults to null if not provided.",
+                    "type": ["string", "null"]
+                  },
+                  "description": {
+                    "description": "Description of the task, or null if the task has no description. Defaults to null if not provided.",
+                    "type": ["string", "null"]
+                  },
+                  "dueDate": {
+                    "anyOf": [{"pattern": "^\\d{4}-\\d{2}-\\d{2}$", "type": "string"}, {"type": "null"}],
+                    "description": "Due date of the task in YYYY-MM-DD format, or null if the task has no due date. If both the start date and due date are provided, the due date must be greater than or equal to the start date. Defaults to null if not provided."
+                  },
+                  "isComplete": {
+                    "description": "Whether the task is completed. Defaults to false if not provided.",
+                    "type": "boolean"
+                  },
+                  "priority": {
+                    "anyOf": [{"enum": ["low", "medium", "high"], "type": "string"}, {"type": "null"}],
+                    "description": "Priority level of the task. Must be one of 'low', 'medium', 'high', or null. Defaults to null if not provided."
+                  },
+                  "startDate": {
+                    "anyOf": [{"pattern": "^\\d{4}-\\d{2}-\\d{2}$", "type": "string"}, {"type": "null"}],
+                    "description": "Start date of the task in YYYY-MM-DD format, or null if the task has no start date. If the start date is provided, the due date must also be provided. If both the start date and due date are provided, the due date must be greater than or equal to the start date. Defaults to null if not provided."
+                  },
+                  "taskName": {
+                    "description": "Name of the task.",
+                    "type": "string"
+                  }
+                },
+                "required": ["taskName"],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["sectionName", "tasks"],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": ["project_name", "sections"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:create_task_preview",
+  "description": "Generate a visual preview of a task before creation. Use anytime the user asks to create a task or draft a task. Use this when you want the user to review and confirm the task details first.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "assignee": {
+        "description": "Assignee of the task, or null if the task is unassigned. This can be \"me\", an email, or a user GID chosen among those found using asana_get_workspace_users. Defaults to null if not provided.",
+        "type": ["string", "null"]
+      },
+      "description": {
+        "description": "Description of the task, or null if the task has no description. Defaults to null if not provided.",
+        "type": ["string", "null"]
+      },
+      "dueDate": {
+        "anyOf": [{"pattern": "^\\d{4}-\\d{2}-\\d{2}$", "type": "string"}, {"type": "null"}],
+        "description": "Due date of the task in YYYY-MM-DD format, or null if the task has no due date. If both the start date and due date are provided, the due date must be greater than or equal to the start date. Defaults to null if not provided."
+      },
+      "isComplete": {
+        "description": "Whether the task is completed. Defaults to false if not provided.",
+        "type": "boolean"
+      },
+      "startDate": {
+        "anyOf": [{"pattern": "^\\d{4}-\\d{2}-\\d{2}$", "type": "string"}, {"type": "null"}],
+        "description": "Start date of the task in YYYY-MM-DD format, or null if the task has no start date. If the start date is provided, the due date must also be provided. If both the start date and due date are provided, the due date must be greater than or equal to the start date. Defaults to null if not provided."
+      },
+      "taskName": {
+        "description": "Name of the task.",
+        "type": "string"
+      }
+    },
+    "required": ["taskName"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_items_for_portfolio",
+  "description": "List projects, goals, and other items in a portfolio. Returns item names, IDs, and types. Use for portfolio content exploration and management. Supports pagination for portfolios with many items.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "limit": {
+        "description": "Results per page (1-100)",
+        "maximum": 100,
+        "minimum": 1,
+        "type": "number"
+      },
+      "offset": {
+        "description": "Pagination offset token",
+        "type": "string"
+      },
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response",
+        "type": "string"
+      },
+      "portfolio_gid": {
+        "description": "Globally unique identifier for the portfolio",
+        "type": "string"
+      }
+    },
+    "required": ["portfolio_gid"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_portfolio",
+  "description": "Get detailed portfolio data by ID including name, owner, and projects. Use after finding portfolio ID via typeahead. Returns complete portfolio configuration. Essential for understanding portfolio context and content.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response",
+        "type": "string"
+      },
+      "portfolio_gid": {
+        "description": "Globally unique identifier for the portfolio",
+        "type": "string"
+      }
+    },
+    "required": ["portfolio_gid"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_portfolios",
+  "description": "List portfolios in workspace owned by the current user. REQUIRES workspace parameter. Returns portfolio names and IDs for portfolios you own. Use for portfolio discovery and management. Supports pagination for workspaces with many portfolios.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "limit": {
+        "description": "Results per page (1-100)",
+        "maximum": 100,
+        "minimum": 1,
+        "type": "number"
+      },
+      "offset": {
+        "description": "Pagination offset token",
+        "type": "string"
+      },
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_project",
+  "description": "Get detailed project data including name, description, owner, members, custom fields, and settings. Use after finding project ID via typeahead. Returns complete project configuration needed for task operations. Specify opt_fields for custom fields data.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response.",
+        "type": "string"
+      },
+      "project_id": {
+        "description": "Globally unique identifier for the project.",
+        "type": "string"
+      }
+    },
+    "required": ["project_id"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_projects",
+  "description": "List projects filtered by workspace. Supports team, archived filters. Returns project names and IDs. Use for filtered project views and bulk operations.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "archived": {
+        "default": false,
+        "description": "Include archived projects.",
+        "type": "boolean"
+      },
+      "limit": {
+        "description": "Number of projects to return per page (1-100).",
+        "maximum": 100,
+        "minimum": 1,
+        "type": "number"
+      },
+      "offset": {
+        "description": "Pagination offset token.",
+        "type": "string"
+      },
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response.",
+        "type": "string"
+      },
+      "team": {
+        "description": "Filter projects on team id",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_status_overview",
+  "description": "Get status overview and progress reports for initiatives/projects. Use this tool as a standalone when users ask for: status updates, status reports, project status, work overview, progress overview, initiative status, identified blockers, or any status-related queries. This tool searches projects and portfolios, extracts tasks and status updates, and returns aggregated project details, tasks, and status information. IMPORTANT: Call this tool directly with keywords - do NOT call other search tools first. This tool handles all searching and aggregation internally.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "keywords": {
+        "description": "Keywords to search for projects. Can be a single keyword (e.g., 'asana') or multiple comma-separated keywords (e.g., 'asana, chatgpt, integration'). The tool searches each keyword separately and combines results from all matching projects (OR logic - matches any keyword).",
+        "type": "string"
+      },
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in task data (e.g., 'name,notes,assignee,due_on,completed').",
+        "type": "string"
+      }
+    },
+    "required": ["keywords"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_task",
+  "description": "Get full task details by ID. Returns name, description, assignee, due dates, custom fields, projects, dependencies. Essential before updating tasks. Use opt_fields for custom field values. Required for understanding task context.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response.",
+        "type": "string"
+      },
+      "task_id": {
+        "description": "Globally unique identifier for the task.",
+        "type": "string"
+      }
+    },
+    "required": ["task_id"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_tasks",
+  "description": "List tasks filtered by context (workspace/project/tag/section/user list). One context required. Supports assignee, date filters. Returns task names and IDs. Use for filtered task views and bulk operations.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "assignee": {
+        "description": "User identifier to assign the task to. Can be \"me\", an email, or a user GID.",
+        "type": "string"
+      },
+      "completed_since": {
+        "description": "Filter for tasks completed since this date in datetime format.",
+        "format": "date-time",
+        "type": "string"
+      },
+      "limit": {
+        "description": "Number of sections to return per page (1-100).",
+        "maximum": 100,
+        "minimum": 1,
+        "type": "number"
+      },
+      "modified_since": {
+        "description": "Filter for tasks modified since this date in datetime format.",
+        "format": "date-time",
+        "type": "string"
+      },
+      "offset": {
+        "description": "Pagination offset token.",
+        "type": "string"
+      },
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Globally unique identifier for the project.",
+        "type": "string"
+      },
+      "section": {
+        "description": "Globally unique identifier for the section.",
+        "type": "string"
+      },
+      "tag": {
+        "description": "The tag GID to retrieve tasks for",
+        "type": "string"
+      },
+      "user_task_list": {
+        "description": "Globally unique identifier for the user task list.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_user",
+  "description": "Get user details by ID, email, or \"me\". Returns name, email, workspaces. Use to find user IDs for task assignment. \"me\" returns authenticated user info. Essential before assigning tasks. When no user_id is provided, defaults to \"me\" (authenticated user) - equivalent to the former asana_get_user_info tool.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response.",
+        "type": "string"
+      },
+      "user_id": {
+        "description": "A string identifying a user. This can be 'me', an email, or the gid of a user. When omitted, defaults to 'me' (authenticated user).",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:get_workspace_users",
+  "description": "Get all users in workspace. Returns compact users with names and IDs. Results are sorted alphabetically and limited to 2000. Prefer searching more narrowly, like by typeahead or team first instead of this.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "offset": {
+        "description": "Pagination offset token from a previous request.",
+        "type": "string"
+      },
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:search_objects",
+  "description": "Quick search across Asana objects. ALWAYS use this FIRST before specialized search. Returns most relevant items based on recency and usage. Faster than dedicated search tools for finding specific items. If the user is not specific about which objects to search, use the following priority order: project + task > portfolio > goal + others (user, team, tag, custom_field).",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "count": {
+        "description": "Number of results to return. Default is 20 if parameter is empty. Minimum 1, maximum 100.",
+        "maximum": 100,
+        "minimum": 1,
+        "type": "number"
+      },
+      "opt_fields": {
+        "description": "Comma-separated list of optional fields to include in the response.",
+        "type": "string"
+      },
+      "query": {
+        "description": "The search query. Can be empty to get default results for the resource type.",
+        "type": "string"
+      },
+      "resource_type": {
+        "description": "The type of resource to search for.",
+        "enum": ["custom_field", "goal", "project", "project_template", "portfolio", "tag", "task", "team", "user"],
+        "type": "string"
+      }
+    },
+    "required": ["resource_type"],
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:search_tasks_preview",
+  "description": "Search for tasks in the workspace and render a preview of the results. Use when the user wants to explore and search for tasks in the workspace, such as when the user asks to 'show me my tasks' or 'show me tasks for the week'. All search filters are optional, but use at least one search filter to limit the results to a specific set of tasks. For example, use the 'completed' filter to show only completed tasks, or the 'start_on_before' filter to show tasks that started before a certain date. Combine filters to find tasks that match multiple criteria, such as 'show me tasks assigned to Sarah that are due after next Monday'. Use the 'text' filter as a freeform search term to find tasks that match the specified text (exactly) in the task name or description. After calling this tool, do not summarize, list, or mention specific task names in your response.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "assignee_any": {
+        "description": "Filter to tasks with assignees matching any of the comma-separated list of user identifiers. User identifiers can be \"me\", an email, or a user GID chosen among those found using asana_get_workspace_users. For example, if the user specifies \"my tasks\", set assignee_any to \"me\". Leave blank to show tasks assigned to any user.",
+        "type": "string"
+      },
+      "completed": {
+        "description": "Filter to either completed or incomplete tasks only. Leave blank to show both completed and incomplete tasks. Prefer filtering to incomplete tasks only, EXCEPT when the user specifically and EXPLICITLY asks for completed tasks only, or both completed and incomplete tasks.",
+        "type": "boolean"
+      },
+      "completed_on_after": {
+        "description": "Filter to tasks completed after the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks completed after any date, including incomplete tasks.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "completed_on_before": {
+        "description": "Filter to tasks completed before the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks completed before any date, including incomplete tasks.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "created_by_any": {
+        "description": "Filter to tasks created by a user matching any of the comma-separated list of user identifiers. User identifiers can be \"me\", an email, or a user GID chosen among those found using asana_get_workspace_users. Leave blank to show tasks created by any user.",
+        "type": "string"
+      },
+      "created_on_after": {
+        "description": "Filter to tasks created after the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks created after any date.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "created_on_before": {
+        "description": "Filter to tasks created before the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks created before any date.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "due_on_after": {
+        "description": "Filter to tasks due after the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks due after any date, including tasks with no due date.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "due_on_before": {
+        "description": "Filter to tasks due before the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks due before any date, including tasks with no due date.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "followers_any": {
+        "description": "Filter to tasks followed by any of the comma-separated list of user identifiers. User identifiers can be \"me\", an email, or a user GID chosen among those found using asana_get_workspace_users. Leave blank to show tasks followed by any user.",
+        "type": "string"
+      },
+      "projects_any": {
+        "description": "Filter to tasks in any of the comma-separated list of project IDs (GIDs). Project IDs can be chosen among those found using asana_get_projects. Leave blank to show tasks in any project.",
+        "type": "string"
+      },
+      "start_on_after": {
+        "description": "Filter to tasks with a start date after the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks with a start date after any date, including tasks with no start date.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "start_on_before": {
+        "description": "Filter to tasks with a start date before the specified date. Date must be in YYYY-MM-DD format. Leave blank to show tasks with a start date before any date, including tasks with no start date.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
+      "text": {
+        "description": "Freeform text to search for in task names and descriptions.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+},
+{
+  "name": "Asana:update_task",
+  "description": "Update existing task properties. Change name, notes, assignee, completion status, due dates, custom fields. Requires task ID. Returns updated task data. Use asana_get_task first to understand current state.",
+  "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "assignee": {
+        "description": "User identifier to assign the task to. Can be \"me\", an email, or a user GID.",
+        "type": "string"
+      },
+      "completed": {
+        "description": "Mark the task as completed.",
+        "type": "boolean"
+      },
+      "custom_fields": {
+        "description": "JSON string of custom fields in format: {\"field_gid\": \"value\"}.",
+        "type": "string"
+      },
+      "due_at": {
+        "description": "Due date and time in ISO 8601 format.",
+        "format": "date-time",
+        "type": "string"
+      },
+      "due_on": {
+        "description": "Due date in ISO 8601 format (YYYY-MM-DD).",
+        "format": "date",
+        "type": "string"
+      },
+      "html_notes": {
+        "description": "New task description in HTML format. You can create links to other asana objects with the following instructions: For <a> tags specifically, to make it easier to create @-mentions through the API, we only require that you provide the GID of the object you wish to reference. If you have access to that object, the API will automatically generate the appropriate href and other attributes for you. For example, to create a link to a task with GID \"123\", you can send the tag <a data-asana-gid=\"123\"/> which will then be expanded to <a href=\"https://app.asana.com/0/0/123/f\" data-asana-accessible=\"true\" data-asana-dynamic=\"true\" data-asana-type=\"task\" data-asana-gid=\"123\">Task Name</a>. You can also generate a link to a task in a specific project or tag by including a data-asana-project or data-asana-tag attribute in the <a> tag. All other attributes, as well as the contents of the tag, are ignored.\n\nTo keep the contents of your tag and make a custom vanity link, include the property data-asana-dynamic=\"false\" when setting the contents of the tag. You would send <a data-asana-gid=\"123\" data-asana-dynamic=\"false\">This is some custom text!</a> and receive <a data-asana-accessible=\"true\" data-asana-dynamic=\"false\" data-asana-type=\"task\" data-asana-gid=\"123\">This is some custom text!</a>\n\nIf you do not have access to the referenced object when you try to create a link, the API will not generate an href for you, but will instead look for an href you provide. This allows you to write back <a> tags unmodified even if you do not have access to the resource. If you do not have access to the referenced object and no href is provided, your request will be rejected with a 400 Bad Request error. Similarly, if you provide neither a GID nor a valid href, the request will be rejected with the same error. ",
+        "type": "string"
+      },
+      "name": {
+        "description": "New name for the task.",
+        "type": "string"
+      },
+      "notes": {
+        "description": "New task description and details.",
+        "type": "string"
+      },
+      "task_id": {
+        "description": "Globally unique identifier for the task to update.",
+        "type": "string"
+      }
+    },
+    "required": ["task_id"],
+    "type": "object"
+  }
+}
