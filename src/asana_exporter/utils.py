@@ -1,6 +1,6 @@
 import threading
 
-from loguru import logger as LOG
+from loguru import logger as LOG  # noqa: F401 - re-exported
 
 LOCK = threading.Lock()
 
@@ -14,9 +14,7 @@ def with_lock(f):
 
 
 def required(opts):
-    """
-    @param opts: dict where key is attr name and val is opt name.
-    """
+    """@param opts: dict where key is attr name and val is opt name."""
 
     def _required(f):
         def _inner_required(self, *args, **kwargs):

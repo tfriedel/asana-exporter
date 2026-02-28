@@ -98,6 +98,7 @@ unfixable = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"src/asana_exporter/database/schema.py" = ["E501"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

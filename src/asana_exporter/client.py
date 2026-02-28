@@ -5,7 +5,6 @@ import collections
 import concurrent.futures
 import datetime
 import json
-import os
 import queue
 import re
 import sys
@@ -13,15 +12,14 @@ import threading
 import time
 import urllib
 import urllib.request
-
 from functools import cached_property
+from pathlib import Path
 
+import asana
 from loguru import logger
 
 from asana_exporter import utils
 from asana_exporter.utils import LOG
-
-import asana
 
 
 class AsanaResourceBase(abc.ABC):
@@ -32,8 +30,7 @@ class AsanaResourceBase(abc.ABC):
     @property
     @abc.abstractmethod
     def _local_store(self):
-        """
-        Path to local store of information. If this exists it suggests we have
+        """Path to local store of information. If this exists it suggests we have
         done at least one api request for this resources.
         """
 
@@ -52,22 +49,22 @@ class AsanaResourceBase(abc.ABC):
 
     @utils.with_lock
     def _export_write_locked(self, path, data):
-        if not os.path.isdir(os.path.dirname(path)):
-            LOG.debug(f"write path not found {os.path.dirname(path)}")
+        p = Path(path)
+        if not p.parent.is_dir():
+            LOG.debug(f"write path not found {p.parent}")
             return
 
-        with open(path, "w") as fd:
-            fd.write(data)
+        p.write_text(data)
 
     @utils.with_lock
     def _export_read_locked(self, path):
-        """read from export"""
-        if not os.path.exists(path):
-            LOG.debug(f"read path not found {path}")
+        """Read from export"""
+        p = Path(path)
+        if not p.exists():
+            LOG.debug(f"read path not found {p}")
             return
 
-        with open(path, "r") as fd:
-            return fd.read()
+        return p.read_text()
 
     def get(self, update_from_api=True, prefer_cache=True, readonly=False):
         if prefer_cache and not self.force_update:
@@ -143,19 +140,19 @@ class AsanaProjects(AsanaResourceBase):
         return self.projects_json
 
     def _filter_projects(self, projects):
-        _projects = []
+        filtered = []
         for p in projects:
-            if self.project_include_filter:
-                if not re.search(self.project_include_filter, p["name"]):
-                    continue
+            if self.project_include_filter and not re.search(
+                self.project_include_filter, p["name"]
+            ):
+                continue
 
-            if self.project_exclude_filter:
-                if re.search(self.project_exclude_filter, p["name"]):
-                    continue
+            if self.project_exclude_filter and re.search(self.project_exclude_filter, p["name"]):
+                continue
 
-            _projects.append(p)
+            filtered.append(p)
 
-        return _projects
+        return filtered
 
     def _from_local(self):
         LOG.debug(f"fetching projects for team '{self.team['name']}' from cache")
@@ -192,16 +189,6 @@ class AsanaProjects(AsanaResourceBase):
         LOG.debug(f"saving {len(projects)}/{total} projects")
         if projects:
             LOG.debug("updating project cache")
-            """
-            if os.path.exists(self.projects_json):
-                with open(self.projects_json) as fd:
-                    _projects = json.loads(fd.read())
-
-                for p in _projects:
-                    if p not in projects:
-                        projects.append(p)
-            """
-
             self._export_write_locked(self._local_store, json.dumps(projects))
 
         self.stats["num_projects"] = len(projects)
@@ -212,7 +199,7 @@ class AsanaProjectTasks(AsanaResourceBase):
     def __init__(self, client, project, projects_dir, force_update=False):
         self.client = client
         self.project = project
-        self.root_path = os.path.join(projects_dir, project["gid"])
+        self.root_path = Path(projects_dir) / project["gid"]
         self._stats = ExtractorStats()
         self.modified_gids = None  # None = full sync, set() = incremental
         super().__init__(force_update)
@@ -223,11 +210,11 @@ class AsanaProjectTasks(AsanaResourceBase):
 
     @property
     def _local_store(self):
-        return os.path.join(self.root_path, "tasks.json")
+        return self.root_path / "tasks.json"
 
     @property
     def _sync_meta_path(self):
-        return os.path.join(self.root_path, ".sync_meta.json")
+        return self.root_path / ".sync_meta.json"
 
     def _load_sync_meta(self):
         data = self._export_read_locked(self._sync_meta_path)
@@ -244,9 +231,9 @@ class AsanaProjectTasks(AsanaResourceBase):
         self._export_write_locked(self._sync_meta_path, json.dumps(meta))
 
     def _from_local(self):
-        LOG.debug(
-            f"fetching tasks for project '{self.project['name']}' (gid={self.project['gid']}) from cache"
-        )
+        p_name = self.project["name"]
+        p_gid = self.project["gid"]
+        LOG.debug(f"fetching tasks for project '{p_name}' (gid={p_gid}) from cache")
         tasks = self._export_read_locked(self._local_store)
         if tasks is None:
             return None
@@ -257,12 +244,11 @@ class AsanaProjectTasks(AsanaResourceBase):
         return tasks
 
     def _from_api(self, readonly=False):
-        LOG.info(
-            f"fetching tasks for project '{self.project['name']}' (gid={self.project['gid']}) from api"
-        )
-        path = os.path.join(self.root_path, "tasks")
-        if not os.path.isdir(path):
-            os.makedirs(path)
+        p_name = self.project["name"]
+        p_gid = self.project["gid"]
+        LOG.info(f"fetching tasks for project '{p_name}' (gid={p_gid}) from api")
+        path = self.root_path / "tasks"
+        path.mkdir(parents=True, exist_ok=True)
 
         # Check if incremental sync is possible
         sync_meta = self._load_sync_meta()
@@ -273,7 +259,7 @@ class AsanaProjectTasks(AsanaResourceBase):
         )
 
         # Record sync start BEFORE API calls to avoid gaps
-        sync_start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        sync_start = datetime.datetime.now(datetime.UTC).isoformat()
 
         if use_incremental:
             last_sync = sync_meta["last_sync"]
@@ -299,10 +285,9 @@ class AsanaProjectTasks(AsanaResourceBase):
             # yield
             time.sleep(0)
             for t in modified_tasks:
-                task_path = os.path.join(path, t["gid"])
-                task_json_path = os.path.join(task_path, "task.json")
-                if not os.path.isdir(task_path):
-                    os.makedirs(task_path)
+                task_path = path / t["gid"]
+                task_json_path = task_path / "task.json"
+                task_path.mkdir(parents=True, exist_ok=True)
 
                 fulltask = asana.TasksApi(self.client).get_task(t["gid"], {})
                 self._export_write_locked(task_json_path, json.dumps(fulltask))
@@ -320,13 +305,12 @@ class AsanaProjectTasks(AsanaResourceBase):
             # yield
             time.sleep(0)
             for t in tasks:
-                task_path = os.path.join(path, t["gid"])
-                task_json_path = os.path.join(task_path, "task.json")
-                if os.path.exists(task_json_path):
+                task_path = path / t["gid"]
+                task_json_path = task_path / "task.json"
+                if task_json_path.exists():
                     continue
 
-                if not os.path.isdir(task_path):
-                    os.makedirs(task_path)
+                task_path.mkdir(parents=True, exist_ok=True)
 
                 fulltask = asana.TasksApi(self.client).get_task(t["gid"], {})
                 self._export_write_locked(task_json_path, json.dumps(fulltask))
@@ -344,7 +328,7 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         self.client = client
         self.project = project
         self.task = task
-        self.root_path = os.path.join(projects_dir, project["gid"], "tasks", task["gid"])
+        self.root_path = Path(projects_dir) / project["gid"] / "tasks" / task["gid"]
         self._stats = ExtractorStats()
         super().__init__(force_update)
 
@@ -354,7 +338,7 @@ class AsanaTaskSubTasks(AsanaResourceBase):
 
     @property
     def _local_store(self):
-        return os.path.join(self.root_path, "subtasks.json")
+        return self.root_path / "subtasks.json"
 
     def _from_local(self):
         p_gid = self.project["gid"].strip()
@@ -372,9 +356,8 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
         LOG.info(f"fetching subtasks for task='{t_name}' (project gid={p_gid}) from api")
-        path = os.path.join(self.root_path, "subtasks")
-        if not os.path.isdir(path):
-            os.makedirs(path)
+        path = self.root_path / "subtasks"
+        path.mkdir(parents=True, exist_ok=True)
 
         subtasks = []
         for s in asana.TasksApi(self.client).get_subtasks_for_task(self.task["gid"], {}):
@@ -383,13 +366,12 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         # yield
         time.sleep(0)
         for t in subtasks:
-            task_path = os.path.join(path, t["gid"])
-            task_json_path = os.path.join(task_path, "subtask.json")
-            if os.path.exists(task_json_path):
+            task_path = path / t["gid"]
+            task_json_path = task_path / "subtask.json"
+            if task_json_path.exists():
                 continue
 
-            if not os.path.isdir(task_path):
-                os.makedirs(task_path)
+            task_path.mkdir(parents=True, exist_ok=True)
 
             fulltask = asana.TasksApi(self.client).get_task(t["gid"], {})
             self._export_write_locked(task_json_path, json.dumps(fulltask))
@@ -405,7 +387,7 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         self.client = client
         self.project = project
         self.task = task
-        self.root_path = os.path.join(projects_dir, project["gid"], "tasks", task["gid"])
+        self.root_path = Path(projects_dir) / project["gid"] / "tasks" / task["gid"]
         self._stats = ExtractorStats()
         super().__init__(force_update)
 
@@ -415,7 +397,7 @@ class AsanaProjectTaskStories(AsanaResourceBase):
 
     @property
     def _local_store(self):
-        return os.path.join(self.root_path, "stories.json")
+        return self.root_path / "stories.json"
 
     def _from_local(self):
         p_gid = self.project["gid"].strip()
@@ -433,9 +415,8 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         p_gid = self.project["gid"].strip()
         t_name = self.task["name"].strip()
         LOG.info(f"fetching stories for task='{t_name}' (project gid={p_gid}) from api")
-        path = os.path.join(self.root_path, "stories")
-        if not os.path.isdir(path):
-            os.makedirs(path)
+        path = self.root_path / "stories"
+        path.mkdir(parents=True, exist_ok=True)
 
         stories = []
         for s in asana.StoriesApi(self.client).get_stories_for_task(self.task["gid"], {}):
@@ -444,7 +425,7 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         # yield
         time.sleep(0)
         for s in stories:
-            self._export_write_locked(os.path.join(path, s["gid"]), json.dumps(s))
+            self._export_write_locked(path / s["gid"], json.dumps(s))
 
         self._export_write_locked(self._local_store, json.dumps(stories))
         self.stats["num_stories"] = len(stories)
@@ -457,9 +438,9 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         self.project = project
         self._task = task
         self._subtask = subtask
-        self.root_path = os.path.join(projects_dir, project["gid"], "tasks", task["gid"])
+        self.root_path = Path(projects_dir) / project["gid"] / "tasks" / task["gid"]
         if subtask:
-            self.root_path = os.path.join(self.root_path, "subtasks", subtask["gid"])
+            self.root_path = self.root_path / "subtasks" / subtask["gid"]
         self._stats = ExtractorStats()
         super().__init__(force_update)
 
@@ -476,19 +457,18 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
 
     @property
     def _local_store(self):
-        return os.path.join(self.root_path, "attachments.json")
+        return self.root_path / "attachments.json"
 
     def _download(self, url, path, retries=3):
         LOG.debug(f"downloading {url} to {path}")
         for attempt in range(retries):
             try:
                 rq = urllib.request.Request(url=url)
-                with urllib.request.urlopen(rq) as url_fd:
-                    with open(path, "wb") as fd:
-                        out = "SOF"
-                        while out:
-                            out = url_fd.read(4096)
-                            fd.write(out)
+                with urllib.request.urlopen(rq) as url_fd, Path(path).open("wb") as fd:
+                    out = "SOF"
+                    while out:
+                        out = url_fd.read(4096)
+                        fd.write(out)
                 return
             except (urllib.error.URLError, ConnectionError, OSError) as e:
                 if attempt < retries - 1:
@@ -526,9 +506,8 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
             t_type = "sub"
 
         LOG.info(f"fetching attachments for {t_type}task='{t_name}' (project gid={p_gid}) from api")
-        path = os.path.join(self.root_path, "attachments")
-        if not os.path.isdir(path):
-            os.makedirs(path)
+        path = self.root_path / "attachments"
+        path.mkdir(parents=True, exist_ok=True)
 
         attachments = []
         for s in asana.AttachmentsApi(self.client).get_attachments_for_object(self.task["gid"], {}):
@@ -538,12 +517,12 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         time.sleep(0)
         for s in attachments:
             # convert "compact" record to "full"
-            with open(os.path.join(path, s["gid"]), "w") as fd:
+            with (path / s["gid"]).open("w") as fd:
                 s = asana.AttachmentsApi(self.client).get_attachment(s["gid"], {})
                 fd.write(json.dumps(s))
                 url = s["download_url"]
                 if url:
-                    self._download(url, os.path.join(path, f"{s['gid']}_download"))
+                    self._download(url, path / f"{s['gid']}_download")
 
         self._export_write_locked(self._local_store, json.dumps(attachments))
         self.stats["num_attachments"] = len(attachments)
@@ -568,8 +547,7 @@ class AsanaExtractor:
         self.project_exclude_filter = project_exclude_filter
         self.token = token
         self.force_update = force_update
-        if not os.path.isdir(self.export_path):
-            os.makedirs(self.export_path)
+        Path(self.export_path).mkdir(parents=True, exist_ok=True)
 
     @cached_property
     @utils.required({"token": "--token"})
@@ -583,32 +561,29 @@ class AsanaExtractor:
     @cached_property
     @utils.required({"_workspace": "--workspace"})
     def workspace(self):
-        """
-        If workspace name is provided we need to lookup its GID.
-        """
+        """If workspace name is provided we need to lookup its GID."""
         try:
             return int(self._workspace)
         except ValueError:
-            ws = [
+            ws = next(
                 w["gid"]
                 for w in asana.WorkspacesApi(self.client).get_workspaces({})
                 if w["name"] == self._workspace
-            ][0]
+            )
             LOG.info(f"resolved workspace name '{self._workspace}' to gid '{ws}'")
             return ws
 
     @property
     def teams_json(self):
-        return os.path.join(self.export_path, "teams.json")
+        return Path(self.export_path) / "teams.json"
 
     @utils.with_lock
     def get_teams(self, readonly=False):
         stats = ExtractorStats()
         teams = []
-        if os.path.exists(self.teams_json):
+        if self.teams_json.exists():
             LOG.debug("using cached teams")
-            with open(self.teams_json) as fd:
-                teams = json.loads(fd.read())
+            teams = json.loads(self.teams_json.read_text())
         else:
             LOG.debug("fetching teams from api")
             teams = []
@@ -616,8 +591,7 @@ class AsanaExtractor:
                 teams.append(p)
 
             if not readonly:
-                with open(self.teams_json, "w") as fd:
-                    fd.write(json.dumps(teams))
+                self.teams_json.write_text(json.dumps(teams))
 
                 LOG.debug(f"saved {len(teams)} teams")
 
@@ -636,20 +610,19 @@ class AsanaExtractor:
 
     @property
     def export_path_team(self):
-        return os.path.join(self.export_path, "teams", self.team["gid"])
+        return Path(self.export_path) / "teams" / self.team["gid"]
 
     @property
     def projects_json(self):
-        return os.path.join(self.export_path_team, "projects.json")
+        return self.export_path_team / "projects.json"
 
     @property
     def projects_dir(self):
-        return os.path.join(self.export_path_team, "projects")
+        return self.export_path_team / "projects"
 
     @utils.required({"teamname": "--team"})
     def get_projects(self, *args, **kwargs):
-        """
-        Fetch projects owned by a give team. By default this will get projects
+        """Fetch projects owned by a give team. By default this will get projects
         from the Asana api and add them to the extraction archive.
 
         Since the api can be slow, it is recommended to use the available
@@ -668,16 +641,15 @@ class AsanaExtractor:
         return projects, ap.stats
 
     def get_project_templates(self):
-        root_path = path = os.path.join(self.projects_dir)
-        if os.path.exists(os.path.join(root_path, "templates.json")):
+        root_path = self.projects_dir
+        templates_json = root_path / "templates.json"
+        if templates_json.exists():
             LOG.debug("using cached project templates")
-            with open(os.path.join(root_path, "templates.json")) as fd:
-                templates = json.loads(fd.read())
+            templates = json.loads(templates_json.read_text())
         else:
             LOG.info(f"fetching project templates for team '{self.team['name']}' from api")
-            path = os.path.join(root_path, "templates")
-            if not os.path.isdir(path):
-                os.makedirs(path)
+            templates_dir = root_path / "templates"
+            templates_dir.mkdir(parents=True, exist_ok=True)
 
             templates = []
             for t in asana.ProjectsApi(self.client).get_projects_for_team(
@@ -688,15 +660,12 @@ class AsanaExtractor:
             # yield
             time.sleep(0)
 
-            with open(os.path.join(root_path, "templates.json"), "w") as fd:
-                fd.write(json.dumps(templates))
+            templates_json.write_text(json.dumps(templates))
 
         return templates, {}
 
     def get_project_tasks(self, project, *args, **kwargs):
-        """
-        @param update_from_api: allow fetching from the API.
-        """
+        """@param update_from_api: allow fetching from the API."""
         apt = AsanaProjectTasks(
             self.client, project, self.projects_dir, force_update=self.force_update
         )
@@ -704,9 +673,7 @@ class AsanaExtractor:
         return tasks, apt.stats, apt.modified_gids
 
     def get_task_subtasks(self, project, task, event, stats_queue, *args, **kwargs):
-        """
-        @param update_from_api: allow fetching from the API.
-        """
+        """@param update_from_api: allow fetching from the API."""
         event.clear()
         atst = AsanaTaskSubTasks(
             self.client, project, self.projects_dir, task, force_update=self.force_update
@@ -717,9 +684,7 @@ class AsanaExtractor:
         stats_queue.put(atst.stats)
 
     def get_task_stories(self, project, task, stats_queue, *args, **kwargs):
-        """
-        @param update_from_api: allow fetching from the API.
-        """
+        """@param update_from_api: allow fetching from the API."""
         ats = AsanaProjectTaskStories(
             self.client, project, self.projects_dir, task, force_update=self.force_update
         )
@@ -727,9 +692,7 @@ class AsanaExtractor:
         stats_queue.put(ats.stats)
 
     def get_task_attachments(self, project, task, stats_queue, *args, **kwargs):
-        """
-        @param update_from_api: allow fetching from the API.
-        """
+        """@param update_from_api: allow fetching from the API."""
         ata = AsanaProjectTaskAttachments(
             self.client, project, self.projects_dir, task, force_update=self.force_update
         )
@@ -737,9 +700,7 @@ class AsanaExtractor:
         stats_queue.put(ata.stats)
 
     def get_subtask_attachments(self, project, task, event, stats_queue, *args, **kwargs):
-        """
-        @param update_from_api: allow fetching from the API.
-        """
+        """@param update_from_api: allow fetching from the API."""
         while not event.is_set():
             time.sleep(1)
 
@@ -777,8 +738,7 @@ class AsanaExtractor:
         LOG.info(f"starting extraction to {self.export_path}")
         start = time.time()
 
-        if not os.path.isdir(self.export_path_team):
-            os.makedirs(self.export_path_team)
+        self.export_path_team.mkdir(parents=True, exist_ok=True)
 
         self.get_project_templates()
         projects, stats = self.get_projects(prefer_cache=False)
@@ -846,8 +806,8 @@ class AsanaExtractor:
 
         LOG.info(f"completed extraction of {len(projects)} projects.")
         while not stats_queue.empty():
-            _stats = stats_queue.get()
-            stats.combine(_stats)
+            item = stats_queue.get()
+            stats.combine(item)
 
         LOG.info(f"stats: {stats}")
         end = time.time()
@@ -967,17 +927,18 @@ def main():
 
     if args.to_sqlite:
         import sqlite3
+
         from asana_exporter.database import (
-            migrate_schema,
             import_export_dir,
+            migrate_schema,
             rebuild_task_search_fts,
         )
 
-        if not os.path.isdir(args.export_path):
+        if not Path(args.export_path).is_dir():
             LOG.error(f"export path '{args.export_path}' does not exist or is not a directory")
             return
 
-        db_path = args.db or os.path.join(args.export_path, "asana.db")
+        db_path = args.db or str(Path(args.export_path) / "asana.db")
         LOG.info(f"importing JSON from '{args.export_path}' into '{db_path}'")
         conn = sqlite3.connect(db_path)
         conn.execute("PRAGMA foreign_keys = ON")
