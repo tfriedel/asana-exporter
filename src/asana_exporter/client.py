@@ -824,10 +824,24 @@ class AsanaExtractor:
 
         self.get_project_templates()
         projects, stats = self.get_projects(prefer_cache=False)
-        stats_queue = queue.Queue()
-        for p in projects:
+        stats_queue: queue.Queue[ExtractorStats] = queue.Queue()
+
+        # Phase 1: Fetch tasks for all projects concurrently
+        project_results: list[
+            tuple[dict[str, Any], list[dict[str, Any]], ExtractorStats, set[str] | None]
+        ] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_project = {
+                executor.submit(self.get_project_tasks, p, prefer_cache=False): p for p in projects
+            }
+            for future in concurrent.futures.as_completed(future_to_project):
+                p = future_to_project[future]
+                tasks, task_stats, modified_gids = future.result()
+                project_results.append((p, tasks, task_stats, modified_gids))
+
+        # Phase 2: Process sub-resources for projects with modified tasks
+        for p, tasks, task_stats, modified_gids in project_results:
             LOG.info(f"extracting project {p['name']}")
-            tasks, task_stats, modified_gids = self.get_project_tasks(p, prefer_cache=False)
             stats.combine(task_stats)
 
             # Determine which tasks need sub-resource refresh
@@ -1084,11 +1098,12 @@ def main() -> None:
             )
     elif args.all_teams:
         teams, _ = ae.get_teams()
+        workspace_gid = str(ae.workspace)  # Resolve once, reuse for all teams
         for t in teams:
             LOG.info(f"exporting team '{t['name']}'")
             team_ae = AsanaExtractor(
                 token=args.token,
-                workspace=args.workspace,
+                workspace=workspace_gid,
                 teamname=t["name"],
                 export_path=args.export_path,
                 project_include_filter=args.project_filter,
