@@ -151,6 +151,10 @@ changelog:
     uv run git-cliff -o CHANGELOG.md
     @echo "✅ CHANGELOG.md updated"
 
+# Install/update the CLI tool
+update:
+    uv run scripts/update.py
+
 # Update all dependencies to latest versions
 update-deps:
     @echo "📦 Updating dependencies..."
