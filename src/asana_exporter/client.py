@@ -683,8 +683,7 @@ class AsanaExtractor:
         except asana.rest.ApiException as e:
             if e.status == 402:
                 LOG.warning(
-                    "search_tasks_for_workspace requires premium, "
-                    "falling back to per-project sync"
+                    "search_tasks_for_workspace requires premium, falling back to per-project sync"
                 )
                 return None
             raise
@@ -700,8 +699,7 @@ class AsanaExtractor:
                     modified_by_project.setdefault(project_gid, set()).add(task_gid)
 
         LOG.info(
-            f"pre-flight: {len(results)} modified tasks across "
-            f"{len(modified_by_project)} projects"
+            f"pre-flight: {len(results)} modified tasks across {len(modified_by_project)} projects"
         )
         return modified_by_project
 
@@ -920,8 +918,7 @@ class AsanaExtractor:
             projects_to_sync = [p for p in projects if p["gid"] in changed_project_gids]
             if len(projects_to_sync) < len(projects):
                 LOG.info(
-                    f"pre-flight: syncing {len(projects_to_sync)}/{len(projects)} "
-                    f"changed projects"
+                    f"pre-flight: syncing {len(projects_to_sync)}/{len(projects)} changed projects"
                 )
         else:
             projects_to_sync = projects

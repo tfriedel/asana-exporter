@@ -39,17 +39,13 @@ class TestGetProject:
         assert "sections" in result
         assert len(result["sections"]) >= 2
 
-    def test_get_project_not_found_returns_error(
-        self, populated_db: sqlite3.Connection
-    ) -> None:
+    def test_get_project_not_found_returns_error(self, populated_db: sqlite3.Connection) -> None:
         result = get_project(populated_db, project_gid="nonexistent")
         assert "error" in result
 
 
 class TestGetProjects:
-    def test_get_projects_returns_all_projects(
-        self, populated_db: sqlite3.Connection
-    ) -> None:
+    def test_get_projects_returns_all_projects(self, populated_db: sqlite3.Connection) -> None:
         result = get_projects(populated_db)
         assert result["total"] == 3
         assert result["count"] == 3
@@ -157,9 +153,7 @@ class TestSearchTasks:
         # t1 found because its comment mentions "root cause"
         assert any(r["gid"] == "t1" for r in result["results"])
 
-    def test_search_tasks_finds_underscored_terms(
-        self, populated_db: sqlite3.Connection
-    ) -> None:
+    def test_search_tasks_finds_underscored_terms(self, populated_db: sqlite3.Connection) -> None:
         result = search_tasks(populated_db, query="user_id")
         assert result["count"] >= 1
         assert any(r["name"] == "Rename user_id to account_id" for r in result["results"])
@@ -167,9 +161,7 @@ class TestSearchTasks:
     def test_holistic_search_snippet_shows_comment_match(
         self, populated_db: sqlite3.Connection
     ) -> None:
-        result = search_tasks(
-            populated_db, query="session token", use_holistic=True
-        )
+        result = search_tasks(populated_db, query="session token", use_holistic=True)
         assert result["count"] >= 1
         match = next(r for r in result["results"] if r["gid"] == "t1")
         # Snippet should come from the comment, not the task name
@@ -180,16 +172,12 @@ class TestSearchTasks:
     ) -> None:
         # "login" matches notes, "session token" matches comment.
         # Comment has more highlighted terms, so should be preferred.
-        result = search_tasks(
-            populated_db, query="login session token", use_holistic=True
-        )
+        result = search_tasks(populated_db, query="login session token", use_holistic=True)
         assert result["count"] >= 1
         match = next(r for r in result["results"] if r["gid"] == "t1")
         assert "[comment]" in match["snippet"]
 
-    def test_search_tasks_empty_query_returns_error(
-        self, populated_db: sqlite3.Connection
-    ) -> None:
+    def test_search_tasks_empty_query_returns_error(self, populated_db: sqlite3.Connection) -> None:
         result = search_tasks(populated_db, query="")
         assert "error" in result
 

@@ -29,33 +29,21 @@ from asana_exporter.mcp.formatters import (
 )
 
 # Common parameter descriptions, reused across tools.
-_D_OPT_FIELDS = (
-    "Comma-separated list of optional fields to include."
-)
+_D_OPT_FIELDS = "Comma-separated list of optional fields to include."
 _D_LIMIT = "Results per page (1-100)."
 _D_OFFSET = "Pagination offset from a previous next_page."
 _D_PROJECT = "Globally unique identifier for the project."
 _D_SECTION = "Globally unique identifier for the section."
 _D_COMPLETED = "Filter to completed or incomplete tasks only."
 _D_TASK_ID = "Globally unique identifier for the task."
-_D_USER_ID = (
-    "Identifier for a user. Can be an email or a GID."
-)
-_D_QUERY = (
-    "Search query. Can be empty for default results."
-)
-_D_RESOURCE_TYPE = (
-    "Resource type to search: project, task, user, or team."
-)
+_D_USER_ID = "Identifier for a user. Can be an email or a GID."
+_D_QUERY = "Search query. Can be empty for default results."
+_D_RESOURCE_TYPE = "Resource type to search: project, task, user, or team."
 _D_COUNT = "Number of results to return (1-100)."
 _D_ASSIGNEE = "User GID to filter tasks by assignee."
-_D_HOLISTIC = (
-    "Also search subtask and comment text."
-)
+_D_HOLISTIC = "Also search subtask and comment text."
 _D_SUBTASKS = "Include the task's subtasks in the response."
-_D_STORIES = (
-    "Include comments and activity stories for the task."
-)
+_D_STORIES = "Include comments and activity stories for the task."
 
 _DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "asana" / "asana.db"
 _READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)

@@ -192,10 +192,20 @@ class TestFormatList:
     def test_wraps_with_next_page_when_more(self) -> None:
         query_result = {
             "results": [
-                {"gid": "t1", "name": "Task 1", "permalink_url": "https://example.com/t1",
-                 "notes": "x", "completed": 0},
-                {"gid": "t2", "name": "Task 2", "permalink_url": "https://example.com/t2",
-                 "notes": "y", "completed": 0},
+                {
+                    "gid": "t1",
+                    "name": "Task 1",
+                    "permalink_url": "https://example.com/t1",
+                    "notes": "x",
+                    "completed": 0,
+                },
+                {
+                    "gid": "t2",
+                    "name": "Task 2",
+                    "permalink_url": "https://example.com/t2",
+                    "notes": "y",
+                    "completed": 0,
+                },
             ],
             "count": 2,
             "total": 5,
@@ -214,8 +224,12 @@ class TestFormatList:
     def test_next_page_null_on_last_page(self) -> None:
         query_result = {
             "results": [
-                {"gid": "t1", "name": "Task 1", "permalink_url": "https://example.com/t1",
-                 "completed": 0},
+                {
+                    "gid": "t1",
+                    "name": "Task 1",
+                    "permalink_url": "https://example.com/t1",
+                    "completed": 0,
+                },
             ],
             "count": 1,
             "total": 1,
@@ -259,10 +273,18 @@ class TestFormatSearchObjects:
     def test_wraps_results_in_data(self) -> None:
         query_result = {
             "results": [
-                {"gid": "t1", "name": "Task 1", "permalink_url": "https://example.com/t1",
-                 "completed": 0},
-                {"gid": "t2", "name": "Task 2", "permalink_url": "https://example.com/t2",
-                 "completed": 0},
+                {
+                    "gid": "t1",
+                    "name": "Task 1",
+                    "permalink_url": "https://example.com/t1",
+                    "completed": 0,
+                },
+                {
+                    "gid": "t2",
+                    "name": "Task 2",
+                    "permalink_url": "https://example.com/t2",
+                    "completed": 0,
+                },
             ],
             "count": 2,
         }

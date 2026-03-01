@@ -54,6 +54,7 @@ dependencies = [
     { name = "asana" },
     { name = "loguru" },
     { name = "mcp", extra = ["cli"] },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -76,6 +77,7 @@ requires-dist = [
     { name = "asana" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
 ]
 
 [package.metadata.requires-dev]

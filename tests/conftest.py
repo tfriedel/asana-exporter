@@ -40,55 +40,79 @@ def populated_db(db: sqlite3.Connection, tmp_path: Path) -> sqlite3.Connection:
     }
 
     t1 = make_task(
-        "t1", "Fix login bug",
-        project_gid="proj1", project_name="Backend API",
-        section_gid="sec1", section_name="To Do",
+        "t1",
+        "Fix login bug",
+        project_gid="proj1",
+        project_name="Backend API",
+        section_gid="sec1",
+        section_name="To Do",
         assignee={"gid": "user1", "name": "Alice", "email": "alice@example.com"},
         notes="Login fails on mobile",
         due_on="2024-02-01",
     )
     t2 = make_task(
-        "t2", "Add API rate limiting",
-        project_gid="proj1", project_name="Backend API",
-        section_gid="sec2", section_name="In Progress",
+        "t2",
+        "Add API rate limiting",
+        project_gid="proj1",
+        project_name="Backend API",
+        section_gid="sec2",
+        section_name="In Progress",
         assignee={"gid": "user2", "name": "Bob", "email": "bob@example.com"},
     )
     t3 = make_task(
-        "t3", "Write API docs",
-        project_gid="proj1", project_name="Backend API",
-        section_gid="sec3", section_name="Done",
+        "t3",
+        "Write API docs",
+        project_gid="proj1",
+        project_name="Backend API",
+        section_gid="sec3",
+        section_name="Done",
         assignee={"gid": "user1", "name": "Alice", "email": "alice@example.com"},
         completed=True,
     )
     t4 = make_task(
-        "t4", "Redesign dashboard",
-        project_gid="proj2", project_name="Frontend App",
-        section_gid="sec1", section_name="To Do",
+        "t4",
+        "Redesign dashboard",
+        project_gid="proj2",
+        project_name="Frontend App",
+        section_gid="sec1",
+        section_name="To Do",
         assignee={"gid": "user2", "name": "Bob", "email": "bob@example.com"},
         notes="Use new component library",
     )
     t5 = make_task(
-        "t5", "Update color palette",
-        project_gid="proj3", project_name="Brand Guide",
-        section_gid="sec4", section_name="Research",
+        "t5",
+        "Update color palette",
+        project_gid="proj3",
+        project_name="Brand Guide",
+        section_gid="sec4",
+        section_name="Research",
         assignee={"gid": "user1", "name": "Alice", "email": "alice@example.com"},
     )
     t6 = make_task(
-        "t6", "Deploy v2.0",
-        project_gid="proj1", project_name="Backend API",
-        section_gid="sec2", section_name="In Progress",
+        "t6",
+        "Deploy v2.0",
+        project_gid="proj1",
+        project_name="Backend API",
+        section_gid="sec2",
+        section_name="In Progress",
         due_on="2024-03-01",
     )
     t7 = make_task(
-        "t7", "Rename user_id to account_id",
-        project_gid="proj1", project_name="Backend API",
-        section_gid="sec2", section_name="In Progress",
+        "t7",
+        "Rename user_id to account_id",
+        project_gid="proj1",
+        project_name="Backend API",
+        section_gid="sec2",
+        section_name="In Progress",
     )
 
     subtask = make_task(
-        "st1", "Reproduce on Android",
-        project_gid="proj1", project_name="Backend API",
-        section_gid="sec1", section_name="To Do",
+        "st1",
+        "Reproduce on Android",
+        project_gid="proj1",
+        project_name="Backend API",
+        section_gid="sec1",
+        section_name="To Do",
         assignee={"gid": "user2", "name": "Bob", "email": "bob@example.com"},
     )
 

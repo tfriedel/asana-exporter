@@ -5,28 +5,32 @@ from typing import Any
 _COMPACT_FIELDS = ("gid", "name", "permalink_url")
 
 # Scalar fields that can be copied directly from a task row.
-_TASK_SCALAR_FIELDS = frozenset({
-    "notes",
-    "html_notes",
-    "due_on",
-    "due_at",
-    "start_on",
-    "start_at",
-    "created_at",
-    "modified_at",
-    "completed_at",
-    "resource_subtype",
-    "num_likes",
-    "num_subtasks",
-})
+_TASK_SCALAR_FIELDS = frozenset(
+    {
+        "notes",
+        "html_notes",
+        "due_on",
+        "due_at",
+        "start_on",
+        "start_at",
+        "created_at",
+        "modified_at",
+        "completed_at",
+        "resource_subtype",
+        "num_likes",
+        "num_subtasks",
+    }
+)
 
 # Scalar fields that can be copied directly from a project row.
-_PROJECT_SCALAR_FIELDS = frozenset({
-    "description",
-    "created_at",
-    "modified_at",
-    "due_date",
-})
+_PROJECT_SCALAR_FIELDS = frozenset(
+    {
+        "description",
+        "created_at",
+        "modified_at",
+        "due_date",
+    }
+)
 
 # Fields stored as int 0/1 in DB but should be bool in responses.
 _BOOL_FIELDS = frozenset({"completed", "archived"})
@@ -190,12 +194,14 @@ def _format_generic(
 
 
 # Register format functions by resource type.
-_FORMAT_FNS.update({
-    "task": format_task,
-    "project": format_project,
-    "user": format_user,
-    "team": _format_generic,
-})
+_FORMAT_FNS.update(
+    {
+        "task": format_task,
+        "project": format_project,
+        "user": format_user,
+        "team": _format_generic,
+    }
+)
 
 
 def format_single(
