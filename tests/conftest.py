@@ -79,6 +79,11 @@ def populated_db(db: sqlite3.Connection, tmp_path: Path) -> sqlite3.Connection:
         section_gid="sec2", section_name="In Progress",
         due_on="2024-03-01",
     )
+    t7 = make_task(
+        "t7", "Rename user_id to account_id",
+        project_gid="proj1", project_name="Backend API",
+        section_gid="sec2", section_name="In Progress",
+    )
 
     subtask = make_task(
         "st1", "Reproduce on Android",
@@ -90,7 +95,7 @@ def populated_db(db: sqlite3.Connection, tmp_path: Path) -> sqlite3.Connection:
     comment = make_story("s1", "Found the root cause - session token expires")
 
     tasks_map: dict[tuple[str, str], list[dict[str, Any]]] = {
-        ("team1", "proj1"): [t1, t2, t3, t6],
+        ("team1", "proj1"): [t1, t2, t3, t6, t7],
         ("team1", "proj2"): [t4],
         ("team2", "proj3"): [t5],
     }

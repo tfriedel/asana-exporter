@@ -330,7 +330,7 @@ def rebuild_task_search_fts(conn: sqlite3.Connection) -> int:
                 GROUP_CONCAT(s.text, X'0A') AS comment_text
             FROM stories s
             JOIN task_roots tr ON tr.gid = s.task_gid
-            WHERE s.resource_subtype = 'comment'
+            WHERE s.resource_subtype = 'comment_added'
             GROUP BY tr.root_gid
         ) comment_agg ON comment_agg.root_gid = t.gid
         WHERE t.parent_gid IS NULL
