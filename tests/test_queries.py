@@ -3,6 +3,7 @@
 import sqlite3
 
 from asana_exporter.database.queries import (
+    _prepare_fts_query,
     get_project,
     get_projects,
     get_task,
@@ -86,6 +87,14 @@ class TestGetTask:
         result = get_task(populated_db, task_gid="nonexistent")
         assert "error" in result
 
+    def test_get_task_includes_num_subtasks(self, populated_db: sqlite3.Connection) -> None:
+        result = get_task(populated_db, task_gid="t1")
+        assert result["num_subtasks"] == 1
+
+    def test_get_task_includes_parent_name(self, populated_db: sqlite3.Connection) -> None:
+        result = get_task(populated_db, task_gid="st1")
+        assert result["parent_name"] == "Fix login bug"
+
     def test_get_task_includes_subtasks(self, populated_db: sqlite3.Connection) -> None:
         result = get_task(populated_db, task_gid="t1", include_subtasks=True)
         assert len(result["subtasks"]) == 1
@@ -148,6 +157,36 @@ class TestSearchTasks:
         # t1 found because its comment mentions "root cause"
         assert any(r["gid"] == "t1" for r in result["results"])
 
+    def test_search_tasks_finds_underscored_terms(
+        self, populated_db: sqlite3.Connection
+    ) -> None:
+        result = search_tasks(populated_db, query="user_id")
+        assert result["count"] >= 1
+        assert any(r["name"] == "Rename user_id to account_id" for r in result["results"])
+
+    def test_holistic_search_snippet_shows_comment_match(
+        self, populated_db: sqlite3.Connection
+    ) -> None:
+        result = search_tasks(
+            populated_db, query="session token", use_holistic=True
+        )
+        assert result["count"] >= 1
+        match = next(r for r in result["results"] if r["gid"] == "t1")
+        # Snippet should come from the comment, not the task name
+        assert "session" in match["snippet"].lower() or "token" in match["snippet"].lower()
+
+    def test_holistic_snippet_prefers_most_highlighted(
+        self, populated_db: sqlite3.Connection
+    ) -> None:
+        # "login" matches notes, "session token" matches comment.
+        # Comment has more highlighted terms, so should be preferred.
+        result = search_tasks(
+            populated_db, query="login session token", use_holistic=True
+        )
+        assert result["count"] >= 1
+        match = next(r for r in result["results"] if r["gid"] == "t1")
+        assert "[comment]" in match["snippet"]
+
     def test_search_tasks_empty_query_returns_error(
         self, populated_db: sqlite3.Connection
     ) -> None:
@@ -178,8 +217,30 @@ class TestSearchObjects:
         assert "error" in result
 
 
+class TestPrepareFtsQuery:
+    def test_underscores_split_into_separate_tokens(self) -> None:
+        result = _prepare_fts_query("user_id")
+        assert result == "user* id"
+
+
 class TestMcpServer:
     def test_mcp_server_creates_without_error(self) -> None:
         from asana_exporter.mcp.server import mcp_server
 
         assert mcp_server.name == "asana-archive"
+
+    def test_tool_names_registered(self) -> None:
+        from asana_exporter.mcp.server import mcp_server
+
+        tool_names = [tool.name for tool in mcp_server._tool_manager.list_tools()]
+        expected = [
+            "search_tasks",
+            "get_task",
+            "get_tasks",
+            "get_project",
+            "get_projects",
+            "get_user",
+            "search_objects",
+        ]
+        for name in expected:
+            assert name in tool_names, f"Missing tool: {name}"

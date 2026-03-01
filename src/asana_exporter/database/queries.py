@@ -162,6 +162,18 @@ def get_task(
 
     result = _task_row_to_dict(row)
 
+    # Compute num_subtasks
+    result["num_subtasks"] = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE parent_gid = ?", (task_gid,)
+    ).fetchone()[0]
+
+    # Look up parent name if task has a parent
+    if result.get("parent_gid"):
+        parent_row = conn.execute(
+            "SELECT name FROM tasks WHERE gid = ?", (result["parent_gid"],)
+        ).fetchone()
+        result["parent_name"] = parent_row["name"] if parent_row else ""
+
     if include_subtasks:
         subtask_rows = conn.execute(
             "SELECT * FROM tasks WHERE parent_gid = ? ORDER BY created_at",
@@ -198,12 +210,13 @@ def _prepare_fts_query(query: str) -> str:
                 if upper in ("AND", "OR", "NOT"):
                     tokens.append(upper)
                 else:
-                    cleaned = re.sub(r"[^\w]", "", word, flags=re.UNICODE)
-                    if cleaned:
-                        if len(cleaned) >= 3:
-                            tokens.append(f"{cleaned}*")
-                        else:
-                            tokens.append(cleaned)
+                    subwords = re.split(r"[^\w]|_", word, flags=re.UNICODE)
+                    for subword in subwords:
+                        if subword:
+                            if len(subword) >= 3:
+                                tokens.append(f"{subword}*")
+                            else:
+                                tokens.append(subword)
     return " ".join(tokens)
 
 
@@ -286,6 +299,34 @@ def _search_per_entity(
     return _paginated_result(results, total, limit, offset)
 
 
+_HOLISTIC_SNIPPET_COLS = (
+    ("snip_name", "name"),
+    ("snip_notes", "notes"),
+    ("snip_subtasks", "subtask"),
+    ("snip_comments", "comment"),
+)
+
+
+def _best_holistic_snippet(row: sqlite3.Row) -> str:
+    """Pick the snippet with the most highlighted terms."""
+    best_snip = ""
+    best_label = "name"
+    best_count = 0
+    for col, label in _HOLISTIC_SNIPPET_COLS:
+        snip = row[col]
+        if snip:
+            count = snip.count("**") // 2  # each highlight is **word**
+            if count > best_count:
+                best_count = count
+                best_snip = snip
+                best_label = label
+    if not best_snip:
+        return row["snip_name"] or ""
+    if best_label in ("subtask", "comment"):
+        return f"[{best_label}] {best_snip}"
+    return best_snip
+
+
 def _search_holistic(
     conn: sqlite3.Connection,
     fts_query: str,
@@ -317,7 +358,11 @@ def _search_holistic(
     total = conn.execute(count_sql, params).fetchone()[0]
 
     select_sql = f"""
-        SELECT t.*, snippet(task_search_fts, 0, '**', '**', '...', 32) as snippet
+        SELECT t.*,
+            snippet(task_search_fts, 0, '**', '**', '...', 32) as snip_name,
+            snippet(task_search_fts, 1, '**', '**', '...', 32) as snip_notes,
+            snippet(task_search_fts, 2, '**', '**', '...', 32) as snip_subtasks,
+            snippet(task_search_fts, 3, '**', '**', '...', 32) as snip_comments
         FROM task_search_fts
         JOIN tasks t ON t.gid = task_search_fts.task_gid
         WHERE {where}{join_where}
@@ -329,7 +374,7 @@ def _search_holistic(
     results = []
     for row in rows:
         d = _task_row_to_dict(row)
-        d["snippet"] = row["snippet"]
+        d["snippet"] = _best_holistic_snippet(row)
         results.append(d)
 
     return _paginated_result(results, total, limit, offset)

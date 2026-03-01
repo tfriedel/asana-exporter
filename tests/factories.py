@@ -58,7 +58,7 @@ def make_task(
     return task
 
 
-def make_story(gid: str, text: str, resource_subtype: str = "comment") -> dict[str, Any]:
+def make_story(gid: str, text: str, resource_subtype: str = "comment_added") -> dict[str, Any]:
     """Build a realistic Asana story dict."""
     return {
         "gid": gid,
