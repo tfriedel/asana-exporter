@@ -5,6 +5,7 @@ import collections
 import concurrent.futures
 import datetime
 import json
+import os
 import queue
 import re
 import sys
@@ -1012,12 +1013,31 @@ class AsanaExtractor:
         LOG.info(f"extraction to {self.export_path} completed in {round(end - start, 3)} secs.")
 
 
+def _load_dotenv() -> None:
+    """Load variables from .env file in the current directory if it exists."""
+    env_path = Path(".env")
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
 def main() -> None:
+    _load_dotenv()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--debug", action="store_true", default=False, help=("enable debug logging")
     )
-    parser.add_argument("--token", type=str, default=None, help="Asana api token")
+    parser.add_argument(
+        "--token",
+        type=str,
+        default=os.environ.get("ASANA_TOKEN"),
+        help="Asana api token (default: $ASANA_TOKEN from environment or .env file)",
+    )
     parser.add_argument(
         "--workspace",
         type=str,
